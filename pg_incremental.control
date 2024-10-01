@@ -1,0 +1,6 @@
+comment = 'Incremental Processing by Crunchy Data'
+default_version = '1.0'
+module_pathname = '$libdir/pg_pipeline'
+relocatable = false
+requires = 'pg_cron'
+schema = pg_catalog

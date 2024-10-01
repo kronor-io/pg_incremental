@@ -3,6 +3,7 @@
 
 # Object files
 *.o
+*.bc
 *.ko
 *.obj
 *.elf
@@ -50,3 +51,6 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+.gdb_history
+.deps/
