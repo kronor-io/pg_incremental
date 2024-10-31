@@ -31,11 +31,10 @@ create table events_agg (
 
 ```
 
-You can then define a "pipeline" with the `incremental.create_sequence_pipeline` function by giving it the name of a source table name with a sequence, or an explicit sequence name.
+You can then define a "pipeline" with the `incremental.create_sequence_pipeline` function by giving it the name of a source table name with a sequence, or an explicit sequence name. The query you pass will be executed in a context where $1 and $2 are set to the lowest and highest value of a range of sequence values that can be safely aggregated, because the pipeline execution makes sure that all ongoing transactions are only genearting higher values by waiting for table locks. 
 
 ```sql
 -- create a pipeline from a postgres table using a sequence
--- $1 and $2 will be set to the start and end of a range of sequence values that can be safely aggregated
 select incremental.create_sequence_pipeline('event-aggregation', 'events', $$
   insert into events_agg
   select date_trunc('day', event_time), count(*)
