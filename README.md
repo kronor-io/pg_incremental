@@ -2,7 +2,7 @@
 
 When storing a stream of event data in PostgreSQL (e.g. IoT, time series), a common challenge is to process only the new inserts. For instance, you might want to create one or more rollup tables containing pre-aggregated data, and insert and update the aggregates as new data arrives. However, you cannot really know the data that is still being inserted by concurrent transactions, and immediately aggregating data when inserting (e.g. via triggers) is certain to create a concurrency bottleneck. When periodically repeating an aggregation, you also want to make sure that events are processed successfully exactly once, even when queries fail.
 
-`pg_incremental` is a simple extension that helps you do fast, reliable, incremental batch processing of inserts in PostgreSQL.
+`pg_incremental` is a simple extension that helps you do fast, reliable, incremental batch processing of new rows in a PostgreSQL table.
 
 ## Creating incremental processing pipelines
 
