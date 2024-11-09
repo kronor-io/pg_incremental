@@ -6,40 +6,46 @@
 #include "catalog/dependency.h"
 #include "catalog/pg_authid.h"
 #include "crunchy/incremental/pipeline.h"
-#include "crunchy/incremental/sequence.h"
+#include "crunchy/incremental/time_interval.h"
 #include "executor/spi.h"
 #include "storage/lmgr.h"
 #include "storage/lock.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
+#include "utils/fmgrprotos.h"
 #include "utils/lsyscache.h"
 #include "utils/palloc.h"
 #include "utils/rel.h"
+#include "utils/timestamp.h"
 
 
 /*
- * SequenceNumberRange represents a range of sequence numbers that can
+ * TimeIntervalRange represents a time range that can
  * be safely processed.
  */
-typedef struct SequenceNumberRange
+typedef struct TimeIntervalRange
 {
-	uint64		rangeStart;
-	uint64		rangeEnd;
-}			SequenceNumberRange;
+	TimestampTz	rangeStart;
+	TimestampTz	rangeEnd;
+
+	Interval *interval;
+	bool batched;
+}			TimeIntervalRange;
 
 
-static SequenceNumberRange * PopSequenceNumberRange(char *pipelineName, Oid sequenceId);
-static SequenceNumberRange * GetSequenceNumberRange(char *pipelineName);
-
-
-PG_FUNCTION_INFO_V1(incremental_sequence_range);
+static void ExecuteTimeIntervalPipelineForRange(char *pipelineName, char *command,
+												TimestampTz rangeStart, TimestampTz rangeEnd);
+static TimeIntervalRange * PopTimeIntervalRange(char *pipelineName,
+												Oid relationId);
+static TimeIntervalRange * GetSafeTimeIntervalRange(char *pipelineName);
 
 
 /*
- * InitializeSequencePipelineStats adds the initial sequence pipeline state.
+ * InitializeSequencePipelineStats adds the initial time interval pipeline state.
  */
 void
-InitializeSequencePipelineState(char *pipelineName, Oid sequenceId)
+InitializeTimeRangePipelineState(char *pipelineName, Interval *timeInterval,
+								 Interval *minDelay)
 {
 	Oid			savedUserId = InvalidOid;
 	int			savedSecurityContext = 0;
@@ -52,17 +58,18 @@ InitializeSequencePipelineState(char *pipelineName, Oid sequenceId)
 	SetUserIdAndSecContext(BOOTSTRAP_SUPERUSERID, SECURITY_LOCAL_USERID_CHANGE);
 
 	char	   *query =
-		"insert into incremental.sequence_pipelines "
-		"(pipeline_name, sequence_name) "
-		"values ($1, $2)";
+		"insert into incremental.time_interval_pipelines "
+		"(pipeline_name, time_interval, min_delay) "
+		"values ($1, $2, $3)";
 
 	bool		readOnly = false;
 	int			tupleCount = 0;
-	int			argCount = 2;
-	Oid			argTypes[] = {TEXTOID, OIDOID};
+	int			argCount = 3;
+	Oid			argTypes[] = {TEXTOID, INTERVALOID, INTERVALOID};
 	Datum		argValues[] = {
 		CStringGetTextDatum(pipelineName),
-		ObjectIdGetDatum(sequenceId)
+		IntervalPGetDatum(timeInterval),
+		IntervalPGetDatum(minDelay)
 	};
 	char	   *argNulls = "   ";
 
@@ -81,37 +88,55 @@ InitializeSequencePipelineState(char *pipelineName, Oid sequenceId)
 
 
 /*
- * incremental_sequence_range determines a safe range that can be processed
- * and stores progress as part of the transaction.
+ * ExecuteTimeIntervalPipeline executes a time interval pipeline from
+ * the last processed time up to the end of the most recent time interval.
  */
 void
-ExecuteSequenceRangePipeline(char *pipelineName, char *command)
+ExecuteTimeIntervalPipeline(char *pipelineName, char *command)
 {
 	PipelineDesc *pipelineDesc = ReadPipelineDesc(pipelineName);
+	TimeIntervalRange *range = PopTimeIntervalRange(pipelineName, pipelineDesc->sourceRelationId);
 
-	SequenceNumberRange *range =
-		PopSequenceNumberRange(pipelineName, pipelineDesc->sourceRelationId);
-
-	if (range->rangeStart > range->rangeEnd)
+	if (range->rangeStart >= range->rangeEnd)
 	{
 		ereport(NOTICE, (errmsg("pipeline %s: no rows to process",
 								pipelineName)));
 		return;
 	}
 
-	ereport(NOTICE, (errmsg("pipeline %s: processing sequence values from "
-							INT64_FORMAT " to " INT64_FORMAT,
-							pipelineName, range->rangeStart, range->rangeEnd)));
+	ExecuteTimeIntervalPipelineForRange(pipelineName, command,
+										range->rangeStart, range->rangeEnd);
+}
+
+
+/*
+ * ExecuteTimeIntervalPipelineForRange executes a time interval pipeline for
+ * the given time range.
+ */
+static void
+ExecuteTimeIntervalPipelineForRange(char *pipelineName, char *command,
+									TimestampTz rangeStart, TimestampTz rangeEnd)
+{
+	Datum rangeStartDatum = TimestampTzGetDatum(rangeStart);
+	Datum rangeEndDatum = TimestampTzGetDatum(rangeEnd);
+
+	char *rangeStartStr =
+		DatumGetCString(DirectFunctionCall1(timestamptz_out, rangeStartDatum));
+	char *rangeEndStr =
+		DatumGetCString(DirectFunctionCall1(timestamptz_out, rangeEndDatum));
+
+	ereport(NOTICE, (errmsg("pipeline %s: processing time range from %s to %s",
+							pipelineName, rangeStartStr, rangeEndStr)));
 
 	PushActiveSnapshot(GetTransactionSnapshot());
 
 	bool		readOnly = false;
 	int			tupleCount = 0;
 	int			argCount = 2;
-	Oid			argTypes[] = {INT8OID, INT8OID};
+	Oid			argTypes[] = {TIMESTAMPTZOID, TIMESTAMPTZOID};
 	Datum		argValues[] = {
-		Int64GetDatum(range->rangeStart),
-		Int64GetDatum(range->rangeEnd)
+		rangeStartDatum,
+		rangeEndDatum
 	};
 	char	   *argNulls = "  ";
 
@@ -130,7 +155,7 @@ ExecuteSequenceRangePipeline(char *pipelineName, char *command)
 
 
 /*
- * PopSequenceNumber range returns a range of sequence numbers that can
+ * PopTimeInterval range returns a range of time range that can
  * be safely processed by taking the last returned sequence number as the
  * end of the range, and waiting for all concurrent writers to finish.
  *
@@ -139,28 +164,28 @@ ExecuteSequenceRangePipeline(char *pipelineName, char *command)
  * Note: An assumptions is that writers will only insert sequence numbers
  * that were obtained after locking the table.
  */
-static SequenceNumberRange *
-PopSequenceNumberRange(char *pipelineName, Oid relationId)
+static TimeIntervalRange *
+PopTimeIntervalRange(char *pipelineName, Oid relationId)
 {
-	SequenceNumberRange *range = GetSequenceNumberRange(pipelineName);
+	TimeIntervalRange *range = GetSafeTimeIntervalRange(pipelineName);
 
-	if (range->rangeStart <= range->rangeEnd)
+	if (range->rangeStart < range->rangeEnd)
 	{
 		LOCKTAG		tableLockTag;
 
 		SET_LOCKTAG_RELATION(tableLockTag, MyDatabaseId, relationId);
 
 		/*
-		 * Wait for concurrent writers that may have seen sequence numbers <=
-		 * the last-drawn sequence number.
+		 * Wait for concurrent writers that may have seen now() results lower
+		 * than the start of the time range.
 		 */
 		WaitForLockers(tableLockTag, ShareLock, true);
 
 		/*
-		 * We update the last-processed sequence number, which will commit or
+		 * We update the last-processed time interval, which will commit or
 		 * abort with the current (sub)transaction.
 		 */
-		UpdateLastProcessedSequenceNumber(pipelineName, range->rangeEnd);
+		UpdateLastProcessedTimeInterval(pipelineName, range->rangeEnd);
 	}
 
 	return range;
@@ -168,13 +193,13 @@ PopSequenceNumberRange(char *pipelineName, Oid relationId)
 
 
 /*
- * GetSequenceNumberRange reads the current state of the given sequence pipeline
+ * GetSafeTimeIntervalRange reads the current state of the given sequence pipeline
  * and returns whether there are rows to process.
  */
-static SequenceNumberRange *
-GetSequenceNumberRange(char *pipelineName)
+static TimeIntervalRange *
+GetSafeTimeIntervalRange(char *pipelineName)
 {
-	SequenceNumberRange *range = (SequenceNumberRange *) palloc0(sizeof(SequenceNumberRange));
+	TimeIntervalRange *range = (TimeIntervalRange *) palloc0(sizeof(TimeIntervalRange));
 
 	Oid			savedUserId = InvalidOid;
 	int			savedSecurityContext = 0;
@@ -187,14 +212,16 @@ GetSequenceNumberRange(char *pipelineName)
 	SetUserIdAndSecContext(BOOTSTRAP_SUPERUSERID, SECURITY_LOCAL_USERID_CHANGE);
 
 	/*
-	 * Get the last-drawn sequence number, which may be part of a write that
-	 * has not committed yet. Also block other pipeline rollups.
+	 * Get the last-processed timestamp and the last time interval
+	 * end that precedes the current time minus minDelay.
 	 */
 	char	   *query =
 		"select"
-		" last_processed_sequence_number + 1,"
-		" pg_catalog.pg_sequence_last_value(sequence_name) seq "
-		"from incremental.sequence_pipelines "
+		" last_processed_time,"
+		" pg_catalog.date_bin(time_interval, now() - min_delay, '2001-01-01'),"
+		" time_interval,"
+		" batched "
+		"from incremental.time_interval_pipelines "
 		"where pipeline_name operator(pg_catalog.=) $1 "
 		"for update";
 
@@ -224,19 +251,25 @@ GetSequenceNumberRange(char *pipelineName)
 	TupleDesc	rowDesc = SPI_tuptable->tupdesc;
 	HeapTuple	row = SPI_tuptable->vals[0];
 
-	/* read last_processed_sequence_number + 1 result */
-	bool		rangeStartIsNull = false;
-	Datum		rangeStartDatum = SPI_getbinval(row, rowDesc, 1, &rangeStartIsNull);
+	/* read last_processed_time result */
+	bool		isNull = false;
+	Datum		rangeStartDatum = SPI_getbinval(row, rowDesc, 1, &isNull);
 
-	if (!rangeStartIsNull)
-		range->rangeStart = DatumGetInt64(rangeStartDatum);
+	if (!isNull)
+		range->rangeStart = DatumGetTimestampTz(rangeStartDatum);
 
-	/* read pg_sequence_last_value result */
-	bool		rangeEndIsNull = false;
-	Datum		rangeEndDatum = SPI_getbinval(row, rowDesc, 2, &rangeEndIsNull);
+	/* read current time, rounded down by time interval */
+	Datum		rangeEndDatum = SPI_getbinval(row, rowDesc, 2, &isNull);
 
-	if (!rangeEndIsNull)
-		range->rangeEnd = DatumGetInt64(rangeEndDatum);
+	range->rangeEnd = DatumGetTimestampTz(rangeEndDatum);
+
+	Datum		intervalDatum = SPI_getbinval(row, rowDesc, 3, &isNull);
+
+	range->interval = DatumGetIntervalP(intervalDatum);
+
+	Datum		batchedDatum = SPI_getbinval(row, rowDesc, 4, &isNull);
+
+	range->batched = DatumGetBool(batchedDatum);
 
 	SPI_finish();
 
@@ -246,12 +279,14 @@ GetSequenceNumberRange(char *pipelineName)
 	return range;
 }
 
+
 /*
- * UpdateLastProcessedSequenceNumber updates the last_processed_sequence_number
- * in pipeline.pipelines to the given values.
+ * UpdateLastProcessedTimeInterval updates the last_processed_time
+ * in pipeline.time_interval_pipelines to the given value to indicate which
+ * intervals have been processed.
  */
 void
-UpdateLastProcessedSequenceNumber(char *pipelineName, int64 lastSequenceNumber)
+UpdateLastProcessedTimeInterval(char *pipelineName, TimestampTz lastProcessedInterval)
 {
 	Oid			savedUserId = InvalidOid;
 	int			savedSecurityContext = 0;
@@ -268,17 +303,17 @@ UpdateLastProcessedSequenceNumber(char *pipelineName, int64 lastSequenceNumber)
 	 * has not committed yet. Also block other pipeline rollups.
 	 */
 	char	   *query =
-		"update incremental.sequence_pipelines "
-		"set last_processed_sequence_number = $2 "
+		"update incremental.time_interval_pipelines "
+		"set last_processed_time = $2 "
 		"where pipeline_name operator(pg_catalog.=) $1";
 
 	bool		readOnly = false;
 	int			tupleCount = 0;
 	int			argCount = 2;
-	Oid			argTypes[] = {TEXTOID, INT8OID};
+	Oid			argTypes[] = {TEXTOID, TIMESTAMPTZOID};
 	Datum		argValues[] = {
 		CStringGetTextDatum(pipelineName),
-		Int64GetDatum(lastSequenceNumber)
+		TimestampTzGetDatum(lastProcessedInterval)
 	};
 	char	   *argNulls = "  ";
 
@@ -299,36 +334,4 @@ UpdateLastProcessedSequenceNumber(char *pipelineName, int64 lastSequenceNumber)
 	SPI_finish();
 
 	SetUserIdAndSecContext(savedUserId, savedSecurityContext);
-}
-
-
-/*
- * FindSequenceForRelation returns the Oid of a sequence belonging to the
- * given relation.
- *
- * We currently don't detect sequences that were manually added through
- * DEFAULT nextval(...).
- */
-Oid
-FindSequenceForRelation(Oid relationId)
-{
-	List	   *sequences = getOwnedSequences(relationId);
-
-	if (list_length(sequences) == 0)
-		ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT),
-						errmsg("relation \"%s\" does not have any sequences associated "
-							   "with it",
-							   get_rel_name(relationId)),
-						errhint("Specify the name of the sequence to use for the "
-								"pipeline as the argument")));
-
-	if (list_length(sequences) > 1)
-		ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT),
-						errmsg("relation \"%s\" has multiple sequences associated "
-							   "with it",
-							   get_rel_name(relationId)),
-						errhint("Specify the name of the sequence to use for the "
-								"pipeline as the argument")));
-
-	return linitial_oid(sequences);
 }

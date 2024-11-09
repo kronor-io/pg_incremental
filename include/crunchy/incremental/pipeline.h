@@ -1,7 +1,7 @@
 #pragma once
 
-#define SEQUENCE_PIPELINE 's'
-#define FILE_PIPELINE 'f'
+#define SEQUENCE_RANGE_PIPELINE 's'
+#define TIME_INTERVAL_PIPELINE 't'
 
 typedef char PipelineType;
 
