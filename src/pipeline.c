@@ -135,30 +135,38 @@ incremental_create_time_interval_pipeline(PG_FUNCTION_ARGS)
 	if (PG_ARGISNULL(0))
 		ereport(ERROR, (errmsg("pipeline_name cannot be NULL")));
 	if (PG_ARGISNULL(1))
-		ereport(ERROR, (errmsg("table_name cannot be NULL")));
-	if (PG_ARGISNULL(2))
 		ereport(ERROR, (errmsg("time_interval cannot be NULL")));
-	if (PG_ARGISNULL(3))
+	if (PG_ARGISNULL(2))
 		ereport(ERROR, (errmsg("command cannot be NULL")));
-	if (PG_ARGISNULL(4))
+	if (PG_ARGISNULL(7))
 		ereport(ERROR, (errmsg("min_delay cannot be NULL")));
 
 	char	   *pipelineName = text_to_cstring(PG_GETARG_TEXT_P(0));
-	Oid			relationId = PG_GETARG_OID(1);
-	Interval   *timeInterval = PG_GETARG_INTERVAL_P(2);
-	char	   *command = text_to_cstring(PG_GETARG_TEXT_P(3));
-	Interval   *minDelay = PG_GETARG_INTERVAL_P(4);
-	char	   *schedule = PG_ARGISNULL(5) ? NULL : text_to_cstring(PG_GETARG_TEXT_P(5));
-	bool		executeImmediately = PG_ARGISNULL(6) ? false : PG_GETARG_BOOL(6);
+	Interval   *timeInterval = PG_GETARG_INTERVAL_P(1);
+	char	   *command = text_to_cstring(PG_GETARG_TEXT_P(2));
+	bool		batched = PG_ARGISNULL(3) ? false : PG_GETARG_BOOL(3);
+	TimestampTz startTime = PG_ARGISNULL(4) ? 0 : PG_GETARG_TIMESTAMPTZ(4);
+	Oid			relationId = PG_ARGISNULL(5) ? InvalidOid : PG_GETARG_OID(5);
+	char	   *schedule = PG_ARGISNULL(6) ? NULL : text_to_cstring(PG_GETARG_TEXT_P(6));
+	Interval   *minDelay = PG_GETARG_INTERVAL_P(7);
+	bool		executeImmediately = PG_ARGISNULL(8) ? false : PG_GETARG_BOOL(8);
+
+	if (!batched && PG_ARGISNULL(4))
+	{
+		ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						errmsg("start_time is required for non-batched pipelines"),
+						errdetail("Non-batched pipelines are executed for every interval "
+								  "starting from the start_time")));
+	}
 
 	List *paramTypes = list_make2_oid(TIMESTAMPTZOID, TIMESTAMPTZOID);
 
-	/* sanitize the query */
+	/* validate and sanitize the query */
 	Query	   *parsedQuery = ParseQuery(command, paramTypes);
 	char	   *sanitizedCommand = DeparseQuery(parsedQuery);
 
 	InsertPipeline(pipelineName, TIME_INTERVAL_PIPELINE, relationId, sanitizedCommand);
-	InitializeTimeRangePipelineState(pipelineName, timeInterval, minDelay);
+	InitializeTimeRangePipelineState(pipelineName, batched, startTime, timeInterval, minDelay);
 
 	if (executeImmediately)
 		ExecutePipeline(pipelineName, TIME_INTERVAL_PIPELINE, sanitizedCommand);

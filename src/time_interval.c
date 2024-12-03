@@ -44,7 +44,10 @@ static TimeIntervalRange * GetSafeTimeIntervalRange(char *pipelineName);
  * InitializeSequencePipelineStats adds the initial time interval pipeline state.
  */
 void
-InitializeTimeRangePipelineState(char *pipelineName, Interval *timeInterval,
+InitializeTimeRangePipelineState(char *pipelineName,
+								 bool batched,
+								 TimestampTz startTime,
+								 Interval *timeInterval,
 								 Interval *minDelay)
 {
 	Oid			savedUserId = InvalidOid;
@@ -59,19 +62,21 @@ InitializeTimeRangePipelineState(char *pipelineName, Interval *timeInterval,
 
 	char	   *query =
 		"insert into incremental.time_interval_pipelines "
-		"(pipeline_name, time_interval, min_delay) "
-		"values ($1, $2, $3)";
+		"(pipeline_name, batched, last_processed_time, time_interval, min_delay) "
+		"values ($1, $2, $3, $4, $5)";
 
 	bool		readOnly = false;
 	int			tupleCount = 0;
-	int			argCount = 3;
-	Oid			argTypes[] = {TEXTOID, INTERVALOID, INTERVALOID};
+	int			argCount = 5;
+	Oid			argTypes[] = {TEXTOID, BOOLOID, TIMESTAMPTZOID, INTERVALOID, INTERVALOID};
 	Datum		argValues[] = {
 		CStringGetTextDatum(pipelineName),
+		BoolGetDatum(batched),
+		TimestampTzGetDatum(startTime),
 		IntervalPGetDatum(timeInterval),
 		IntervalPGetDatum(minDelay)
 	};
-	char	   *argNulls = "   ";
+	char	   argNulls[] = "     ";
 
 	SPI_connect();
 	SPI_execute_with_args(query,
@@ -95,6 +100,8 @@ void
 ExecuteTimeIntervalPipeline(char *pipelineName, char *command)
 {
 	PipelineDesc *pipelineDesc = ReadPipelineDesc(pipelineName);
+
+	/* get the full range of data to process */
 	TimeIntervalRange *range = PopTimeIntervalRange(pipelineName, pipelineDesc->sourceRelationId);
 
 	if (range->rangeStart >= range->rangeEnd)
@@ -104,8 +111,48 @@ ExecuteTimeIntervalPipeline(char *pipelineName, char *command)
 		return;
 	}
 
-	ExecuteTimeIntervalPipelineForRange(pipelineName, command,
-										range->rangeStart, range->rangeEnd);
+	if (range->batched)
+	{
+		ExecuteTimeIntervalPipelineForRange(pipelineName, command,
+											range->rangeStart, range->rangeEnd);
+	}
+	else
+	{
+		Datum rangeStartDatum = TimestampTzGetDatum(range->rangeStart);
+		Datum rangeEndDatum = TimestampTzGetDatum(range->rangeEnd);
+
+		char *rangeStartStr =
+			DatumGetCString(DirectFunctionCall1(timestamptz_out, rangeStartDatum));
+		char *rangeEndStr =
+			DatumGetCString(DirectFunctionCall1(timestamptz_out, rangeEndDatum));
+
+		ereport(NOTICE, (errmsg("pipeline %s: processing overall range from %s to %s",
+								pipelineName, rangeStartStr, rangeEndStr)));
+
+		TimestampTz nextStart = range->rangeStart;
+
+		/* while the next start is smaller than the range end */
+		while (TimestampDifferenceMilliseconds(nextStart, range->rangeEnd) > 0)
+		{
+			/* start at the end of the last interval (or overall start of the range) */
+			TimestampTz currentStart = nextStart;
+
+			/* end of time is start_time + interval (exclusive) */
+			Datum currentEndDatum =
+				DirectFunctionCall2(timestamptz_pl_interval,
+									TimestampTzGetDatum(currentStart),
+									IntervalPGetDatum(range->interval));
+
+			TimestampTz currentEnd = DatumGetTimestampTz(currentEndDatum);
+
+			/* execute the pipeline */
+			ExecuteTimeIntervalPipelineForRange(pipelineName, command,
+												currentStart, currentEnd);
+
+			/* next interval starts at the end of this one */
+			nextStart = currentEnd;
+		}
+	}
 }
 
 
@@ -200,6 +247,7 @@ static TimeIntervalRange *
 GetSafeTimeIntervalRange(char *pipelineName)
 {
 	TimeIntervalRange *range = (TimeIntervalRange *) palloc0(sizeof(TimeIntervalRange));
+	range->interval = palloc0(sizeof(Interval));
 
 	Oid			savedUserId = InvalidOid;
 	int			savedSecurityContext = 0;
@@ -265,7 +313,7 @@ GetSafeTimeIntervalRange(char *pipelineName)
 
 	Datum		intervalDatum = SPI_getbinval(row, rowDesc, 3, &isNull);
 
-	range->interval = DatumGetIntervalP(intervalDatum);
+	memcpy(range->interval, DatumGetIntervalP(intervalDatum), sizeof(Interval));
 
 	Datum		batchedDatum = SPI_getbinval(row, rowDesc, 4, &isNull);
 

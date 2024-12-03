@@ -6,7 +6,7 @@ CREATE TABLE incremental.pipelines (
     pipeline_name text not null,
 	pipeline_type "char" not null,
     owner_id oid not null,
-    source_relation regclass not null,
+    source_relation regclass,
     command text,
     primary key (pipeline_name)
 );
@@ -46,17 +46,18 @@ COMMENT ON FUNCTION incremental.create_sequence_pipeline(text,regclass,text,text
 
 CREATE FUNCTION incremental.create_time_interval_pipeline(
                     name text,
-                    table_name regclass,
                     time_interval interval,
                     command text,
-                    batched bool default false,
-                    min_delay interval default '30 seconds',
+                    batched bool default true,
+                    start_time timestamptz default NULL,
+                    source_table_name regclass default NULL,
                     schedule text default '* * * * *',
+                    min_delay interval default '30 seconds',
                     execute_immediately bool default true)
  RETURNS void
  LANGUAGE C
 AS 'MODULE_PATHNAME', $function$incremental_create_time_interval_pipeline$function$;
-COMMENT ON FUNCTION incremental.create_time_interval_pipeline(text,regclass,interval,text,bool,interval,text,bool)
+COMMENT ON FUNCTION incremental.create_time_interval_pipeline(text,interval,text,bool,timestamptz,regclass,text,interval,bool)
  IS 'create a pipeline of new time intervals';
 
 CREATE PROCEDURE incremental.execute_pipeline(name text)

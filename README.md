@@ -73,11 +73,12 @@ Example:
 ```sql
 -- create a pipeline to aggregate new inserts from a postgres table using a specified time interval
 -- $1 and $2 will be set to the start and end (exclusive) of a range of time intervals that can be aggregated
-select incremental.create_time_interval_pipeline('event-aggregation', 'events', '1 day', $$
+select incremental.create_time_interval_pipeline('event-aggregation', '1 day', $$
   insert into events_agg
-  select $1::date, count(*)
+  select event_time::date, count(*)
   from events
   where event_time >= $1 and event_time < $2
+  group by 1
 $$);
 ```
 
@@ -93,7 +94,7 @@ If you need to rebuild an aggregation you can reset a pipeline to the beginning.
 ```sql
 -- Reset a rollup
 begin;
-truncate events_agg
+truncate events_agg;
 select incremental.reset_pipeline('event-aggregation');
 commit;
 ```
