@@ -2,6 +2,7 @@
 
 #define SEQUENCE_RANGE_PIPELINE 's'
 #define TIME_INTERVAL_PIPELINE 't'
+#define FILE_LIST_PIPELINE 'f'
 
 typedef char PipelineType;
 

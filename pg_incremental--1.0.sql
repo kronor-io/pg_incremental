@@ -32,6 +32,23 @@ CREATE TABLE incremental.time_interval_pipelines (
 );
 GRANT SELECT ON incremental.time_interval_pipelines TO public;
 
+/* pipelines that process new files */
+CREATE TABLE incremental.file_list_pipelines (
+    pipeline_name text not null references incremental.pipelines (pipeline_name) on delete cascade on update cascade,
+    prefix text not null,
+    batched bool not null default false,
+    primary key (pipeline_name)
+);
+GRANT SELECT ON incremental.file_list_pipelines TO public;
+
+/* files that have been processed */
+CREATE TABLE incremental.processed_files (
+    pipeline_name text not null references incremental.pipelines (pipeline_name) on delete cascade on update cascade,
+    path text not null,
+    primary key (pipeline_name, path)
+);
+GRANT SELECT ON incremental.processed_files TO public;
+
 CREATE FUNCTION incremental.create_sequence_pipeline(
                     name text,
                     sequence_name regclass,
@@ -59,6 +76,19 @@ CREATE FUNCTION incremental.create_time_interval_pipeline(
 AS 'MODULE_PATHNAME', $function$incremental_create_time_interval_pipeline$function$;
 COMMENT ON FUNCTION incremental.create_time_interval_pipeline(text,interval,text,bool,timestamptz,regclass,text,interval,bool)
  IS 'create a pipeline of new time intervals';
+
+CREATE FUNCTION incremental.create_file_list_pipeline(
+                    name text,
+                    prefix text,
+                    command text,
+                    batched bool default false,
+                    schedule text default '* * * * *',
+                    execute_immediately bool default true)
+ RETURNS void
+ LANGUAGE C
+AS 'MODULE_PATHNAME', $function$incremental_create_file_list_pipeline$function$;
+COMMENT ON FUNCTION incremental.create_file_list_pipeline(text,text,text,bool,text,bool)
+ IS 'create a pipeline of new files';
 
 CREATE PROCEDURE incremental.execute_pipeline(name text)
  LANGUAGE C

@@ -5,6 +5,7 @@
 #include "catalog/dependency.h"
 #include "catalog/pg_authid.h"
 #include "crunchy/incremental/cron.h"
+#include "crunchy/incremental/file_list.h"
 #include "crunchy/incremental/pipeline.h"
 #include "crunchy/incremental/query.h"
 #include "crunchy/incremental/sequence.h"
@@ -29,6 +30,7 @@ static char *GetCronCommandForPipeline(char *pipelineName);
 
 PG_FUNCTION_INFO_V1(incremental_create_sequence_pipeline);
 PG_FUNCTION_INFO_V1(incremental_create_time_interval_pipeline);
+PG_FUNCTION_INFO_V1(incremental_create_file_list_pipeline);
 PG_FUNCTION_INFO_V1(incremental_execute_pipeline);
 PG_FUNCTION_INFO_V1(incremental_reset_pipeline);
 PG_FUNCTION_INFO_V1(incremental_drop_pipeline);
@@ -185,6 +187,62 @@ incremental_create_time_interval_pipeline(PG_FUNCTION_ARGS)
 
 	PG_RETURN_VOID();
 }
+
+
+/*
+ * incremental_create_file_list_pipeline creates a new pipeline that processes
+ * new files.
+ */
+Datum
+incremental_create_file_list_pipeline(PG_FUNCTION_ARGS)
+{
+	if (PG_ARGISNULL(0))
+		ereport(ERROR, (errmsg("pipeline_name cannot be NULL")));
+	if (PG_ARGISNULL(1))
+		ereport(ERROR, (errmsg("prefix cannot be NULL")));
+	if (PG_ARGISNULL(2))
+		ereport(ERROR, (errmsg("command cannot be NULL")));
+
+	char	   *pipelineName = text_to_cstring(PG_GETARG_TEXT_P(0));
+	char	   *prefix = text_to_cstring(PG_GETARG_TEXT_P(1));
+	char	   *command = text_to_cstring(PG_GETARG_TEXT_P(2));
+	bool		batched = PG_ARGISNULL(3) ? false : PG_GETARG_BOOL(3);
+	char	   *schedule = PG_ARGISNULL(4) ? NULL : text_to_cstring(PG_GETARG_TEXT_P(4));
+	bool		executeImmediately = PG_ARGISNULL(5) ? false : PG_GETARG_BOOL(5);
+
+	if (batched)
+	{
+		ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						errmsg("batched file pipelines are not yet supported")));
+	}
+
+	List *paramTypes = list_make1_oid(TEXTOID);
+
+	/* validate and sanitize the query */
+	Query	   *parsedQuery = ParseQuery(command, paramTypes);
+	char	   *sanitizedCommand = DeparseQuery(parsedQuery);
+
+	InsertPipeline(pipelineName, FILE_LIST_PIPELINE, InvalidOid, sanitizedCommand);
+	InitializeFileListPipelineState(pipelineName, prefix, batched);
+
+	if (executeImmediately)
+		ExecutePipeline(pipelineName, FILE_LIST_PIPELINE, sanitizedCommand);
+
+	if (schedule != NULL)
+	{
+		char	   *jobName = GetCronJobNameForPipeline(pipelineName);
+		char	   *cronCommand = GetCronCommandForPipeline(pipelineName);
+
+		int64		jobId = ScheduleCronJob(jobName, schedule, cronCommand);
+
+		ereport(NOTICE, (errmsg("pipeline %s: scheduled cron job with ID " INT64_FORMAT
+								" and schedule %s",
+								pipelineName, jobId, schedule)));
+	}
+
+	PG_RETURN_VOID();
+}
+
 
 
 /*
@@ -395,6 +453,10 @@ ExecutePipeline(char *pipelineName, PipelineType pipelineType, char *command)
 			ExecuteTimeIntervalPipeline(pipelineName, command);
 			break;
 
+		case FILE_LIST_PIPELINE:
+			ExecuteFileListPipeline(pipelineName, command);
+			break;
+
 		default:
 			elog(ERROR, "unknown pipeline type: %c", pipelineType);
 	}
@@ -416,6 +478,11 @@ ResetPipeline(char *pipelineName, PipelineType pipelineType)
 		case TIME_INTERVAL_PIPELINE:
 			UpdateLastProcessedTimeInterval(pipelineName, 0);
 			break;
+
+		case FILE_LIST_PIPELINE:
+			RemoveProcessedFileList(pipelineName);
+			break;
+
 
 		default:
 			elog(ERROR, "unknown pipeline type: %c", pipelineType);
