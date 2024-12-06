@@ -60,7 +60,7 @@ select s % 100, '/page-' || (s % 3), random() from generate_series(1,1000000) s;
 create table events_agg (
   day timestamptz,
   event_count bigint,
-  primary key (hour)
+  primary key (day)
 );
 
 -- create a pipeline to aggregate new inserts from a postgres table using a sequence
@@ -208,10 +208,11 @@ Arguments of the `incremental.create_file_list_pipeline` function:
 
 ## Executing a pipeline
 
-You can also execute a pipeline manually, though it will only run the command if there is new data to process.
+You can also execute a pipeline manually using the `incremental.execute_pipeline` procedure, though it will only run the command if there is new data to process.
 
 ```sql
-select incremental.execute_pipeline('event-aggregation');
+-- call the incremental.execute_pipeline procedure using the CALL syntax
+call incremental.execute_pipeline('event-aggregation');
 ```
 
 When you create the pipeline, you can pass `schedule := NULL` to disable periodic scheduling, such that you can perform all executions manually.
@@ -225,7 +226,7 @@ Arguments of the `incremental.execute_pipeline` function:
 
 ## Resetting an incremental processing pipelines
 
-If you need to rebuild an aggregation you can reset a pipeline to the beginning.
+If you need to rebuild an aggregation you can reset a pipeline to the beginning using the `incremental.reset_pipeline` function.
 ```sql
 -- Clear the summary table and reset the pipeline to rebuild it
 begin;

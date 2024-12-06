@@ -1,0 +1,78 @@
+create extension pg_incremental cascade;
+NOTICE:  installing required extension "pg_cron"
+create schema sequence;
+set search_path to sequence;
+-- create a source table
+create table events (
+  event_id bigint generated always as identity,
+  event_time timestamptz default now(),
+  client_id bigint,
+  path text,
+  response_time double precision
+);
+-- BRIN indexes are highly effective in selecting new ranges
+create index on events using brin (event_id);
+-- generate some random inserts
+insert into events (client_id, path, response_time)
+select s, '/page-' || (s % 3), random() from generate_series(1,100) s;
+-- create a summary table to pre-aggregate the number of events per day
+create table events_agg (
+  day timestamptz,
+  event_count bigint,
+  primary key (day)
+);
+select incremental.create_sequence_pipeline('event-aggregation',
+  sequence_name := 'events',
+  schedule := NULL,
+  command := $$
+  insert into events_agg
+  select date_trunc('day', event_time), count(*)
+  from events
+  where event_id between $1 and $2
+  group by 1
+  on conflict (day) do update set event_count = events_agg.event_count + excluded.event_count;
+  $$);
+NOTICE:  pipeline event-aggregation: processing sequence values from 0 to 100
+ create_sequence_pipeline 
+--------------------------
+ 
+(1 row)
+
+select count(*) from events;
+ count 
+-------
+   100
+(1 row)
+
+select sum(event_count) from events_agg;
+ sum 
+-----
+ 100
+(1 row)
+
+call incremental.execute_pipeline('event-aggregation');
+NOTICE:  pipeline event-aggregation: no rows to process
+insert into events (client_id, path, response_time)
+select s, '/page-' || (s % 3), random() from generate_series(1,100) s;
+call incremental.execute_pipeline('event-aggregation');
+NOTICE:  pipeline event-aggregation: processing sequence values from 101 to 200
+select count(*) from events;
+ count 
+-------
+   200
+(1 row)
+
+select sum(event_count) from events_agg;
+ sum 
+-----
+ 200
+(1 row)
+
+drop schema sequence cascade;
+NOTICE:  drop cascades to 2 other objects
+DETAIL:  drop cascades to table events
+drop cascades to table events_agg
+drop extension pg_incremental;
+NOTICE:  drop cascades to 2 other objects
+DETAIL:  drop cascades to function incremental._drop_extension_trigger()
+drop cascades to event trigger incremental_drop_extension_trigger
