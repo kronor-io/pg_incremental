@@ -168,6 +168,7 @@ Arguments of the `incremental.create_time_range_pipeline` function:
 | `start_time`          | timestamptz | Time from which the intervals start                | `2000-01-01 00:00:00`      |
 | `source_table_name`   | regclass    | Wait for lockers of this table before aggregation  | NULL (no waiting)          |
 | `schedule`            | text        | pg\_cron schedule for periodic execution (or NULL) | `* * * * *` (every minute) |
+| `min_delay`           | interval    | How long to wait to process a past interval        | `30 seconds`               |
 | `execute_immediately` | bool        | Execute command immediately for existing data      | `true`                     |
 
 ### Creating a file list pipeline (PREVIEW)
