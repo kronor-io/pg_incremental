@@ -134,7 +134,7 @@ BEGIN
     SELECT * FROM pg_event_trigger_dropped_objects()
     WHERE object_type IN ('table', 'foreign table', 'sequence')
   LOOP
-    SELECT incremental.drop_pipeline(pipeline_name)
+    PERFORM incremental.drop_pipeline(pipeline_name)
     FROM incremental.pipelines
     WHERE source_relation = v_obj.objid;
   END LOOP;
