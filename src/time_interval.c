@@ -25,11 +25,11 @@
  */
 typedef struct TimeIntervalRange
 {
-	TimestampTz	rangeStart;
-	TimestampTz	rangeEnd;
+	TimestampTz rangeStart;
+	TimestampTz rangeEnd;
 
-	Interval *interval;
-	bool batched;
+	Interval   *interval;
+	bool		batched;
 }			TimeIntervalRange;
 
 
@@ -76,7 +76,7 @@ InitializeTimeRangePipelineState(char *pipelineName,
 		IntervalPGetDatum(timeInterval),
 		IntervalPGetDatum(minDelay)
 	};
-	char	   argNulls[] = "     ";
+	char		argNulls[] = "     ";
 
 	SPI_connect();
 	SPI_execute_with_args(query,
@@ -118,12 +118,12 @@ ExecuteTimeIntervalPipeline(char *pipelineName, char *command)
 	}
 	else
 	{
-		Datum rangeStartDatum = TimestampTzGetDatum(range->rangeStart);
-		Datum rangeEndDatum = TimestampTzGetDatum(range->rangeEnd);
+		Datum		rangeStartDatum = TimestampTzGetDatum(range->rangeStart);
+		Datum		rangeEndDatum = TimestampTzGetDatum(range->rangeEnd);
 
-		char *rangeStartStr =
+		char	   *rangeStartStr =
 			DatumGetCString(DirectFunctionCall1(timestamptz_out, rangeStartDatum));
-		char *rangeEndStr =
+		char	   *rangeEndStr =
 			DatumGetCString(DirectFunctionCall1(timestamptz_out, rangeEndDatum));
 
 		ereport(NOTICE, (errmsg("pipeline %s: processing overall range from %s to %s",
@@ -134,11 +134,14 @@ ExecuteTimeIntervalPipeline(char *pipelineName, char *command)
 		/* while the next start is smaller than the range end */
 		while (TimestampDifferenceMilliseconds(nextStart, range->rangeEnd) > 0)
 		{
-			/* start at the end of the last interval (or overall start of the range) */
+			/*
+			 * start at the end of the last interval (or overall start of the
+			 * range)
+			 */
 			TimestampTz currentStart = nextStart;
 
 			/* end of time is start_time + interval (exclusive) */
-			Datum currentEndDatum =
+			Datum		currentEndDatum =
 				DirectFunctionCall2(timestamptz_pl_interval,
 									TimestampTzGetDatum(currentStart),
 									IntervalPGetDatum(range->interval));
@@ -164,12 +167,12 @@ static void
 ExecuteTimeIntervalPipelineForRange(char *pipelineName, char *command,
 									TimestampTz rangeStart, TimestampTz rangeEnd)
 {
-	Datum rangeStartDatum = TimestampTzGetDatum(rangeStart);
-	Datum rangeEndDatum = TimestampTzGetDatum(rangeEnd);
+	Datum		rangeStartDatum = TimestampTzGetDatum(rangeStart);
+	Datum		rangeEndDatum = TimestampTzGetDatum(rangeEnd);
 
-	char *rangeStartStr =
+	char	   *rangeStartStr =
 		DatumGetCString(DirectFunctionCall1(timestamptz_out, rangeStartDatum));
-	char *rangeEndStr =
+	char	   *rangeEndStr =
 		DatumGetCString(DirectFunctionCall1(timestamptz_out, rangeEndDatum));
 
 	ereport(NOTICE, (errmsg("pipeline %s: processing time range from %s to %s",
@@ -247,6 +250,7 @@ static TimeIntervalRange *
 GetSafeTimeIntervalRange(char *pipelineName)
 {
 	TimeIntervalRange *range = (TimeIntervalRange *) palloc0(sizeof(TimeIntervalRange));
+
 	range->interval = palloc0(sizeof(Interval));
 
 	Oid			savedUserId = InvalidOid;
@@ -260,8 +264,8 @@ GetSafeTimeIntervalRange(char *pipelineName)
 	SetUserIdAndSecContext(BOOTSTRAP_SUPERUSERID, SECURITY_LOCAL_USERID_CHANGE);
 
 	/*
-	 * Get the last-processed timestamp and the last time interval
-	 * end that precedes the current time minus minDelay.
+	 * Get the last-processed timestamp and the last time interval end that
+	 * precedes the current time minus minDelay.
 	 */
 	char	   *query =
 		"select"

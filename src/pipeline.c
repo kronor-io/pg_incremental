@@ -95,7 +95,7 @@ incremental_create_sequence_pipeline(PG_FUNCTION_ARGS)
 			}
 	}
 
-	List *paramTypes = list_make2_oid(INT8OID, INT8OID);
+	List	   *paramTypes = list_make2_oid(INT8OID, INT8OID);
 
 	/* sanitize the query */
 	Query	   *parsedQuery = ParseQuery(command, paramTypes);
@@ -131,8 +131,8 @@ Datum
 incremental_create_time_interval_pipeline(PG_FUNCTION_ARGS)
 {
 	/*
-	 * create_time_range_pipeline is not strict because the last argument can be
-	 * NULL, so check the arguments that cannot be NULL.
+	 * create_time_range_pipeline is not strict because the last argument can
+	 * be NULL, so check the arguments that cannot be NULL.
 	 */
 	if (PG_ARGISNULL(0))
 		ereport(ERROR, (errmsg("pipeline_name cannot be NULL")));
@@ -161,7 +161,7 @@ incremental_create_time_interval_pipeline(PG_FUNCTION_ARGS)
 								  "starting from the start_time")));
 	}
 
-	List *paramTypes = list_make2_oid(TIMESTAMPTZOID, TIMESTAMPTZOID);
+	List	   *paramTypes = list_make2_oid(TIMESTAMPTZOID, TIMESTAMPTZOID);
 
 	/* validate and sanitize the query */
 	Query	   *parsedQuery = ParseQuery(command, paramTypes);
@@ -216,7 +216,7 @@ incremental_create_file_list_pipeline(PG_FUNCTION_ARGS)
 						errmsg("batched file pipelines are not yet supported")));
 	}
 
-	List *paramTypes = list_make1_oid(TEXTOID);
+	List	   *paramTypes = list_make1_oid(TEXTOID);
 
 	/* validate and sanitize the query */
 	Query	   *parsedQuery = ParseQuery(command, paramTypes);
@@ -269,9 +269,13 @@ incremental_reset_pipeline(PG_FUNCTION_ARGS)
 {
 	char	   *pipelineName = text_to_cstring(PG_GETARG_TEXT_P(0));
 	PipelineDesc *pipelineDesc = ReadPipelineDesc(pipelineName);
+	bool		executeImmediately = PG_ARGISNULL(1) ? false : PG_GETARG_BOOL(1);
 
 	EnsurePipelineOwner(pipelineName, pipelineDesc->ownerId);
 	ResetPipeline(pipelineName, pipelineDesc->pipelineType);
+
+	if (executeImmediately)
+		ExecutePipeline(pipelineName, pipelineDesc->pipelineType, pipelineDesc->command);
 
 	PG_RETURN_VOID();
 }

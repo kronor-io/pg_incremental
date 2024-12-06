@@ -23,8 +23,8 @@
  */
 typedef struct FileList
 {
-	List   *files;
-	bool 	batched;
+	List	   *files;
+	bool		batched;
 }			FileList;
 
 
@@ -38,7 +38,7 @@ static void InsertProcessedFile(char *pipelineName, char *path);
  * InitializeFileListPipelineState adds the initial file list pipeline state.
  */
 void
-InitializeFileListPipelineState(char *pipelineName, char *prefix, bool batched)
+InitializeFileListPipelineState(char *pipelineName, char *pattern, bool batched)
 {
 	Oid			savedUserId = InvalidOid;
 	int			savedSecurityContext = 0;
@@ -52,7 +52,7 @@ InitializeFileListPipelineState(char *pipelineName, char *prefix, bool batched)
 
 	char	   *query =
 		"insert into incremental.file_list_pipelines "
-		"(pipeline_name, prefix, batched) "
+		"(pipeline_name, file_pattern, batched) "
 		"values ($1, $2, $3)";
 
 	bool		readOnly = false;
@@ -61,10 +61,10 @@ InitializeFileListPipelineState(char *pipelineName, char *prefix, bool batched)
 	Oid			argTypes[] = {TEXTOID, TEXTOID, BOOLOID};
 	Datum		argValues[] = {
 		CStringGetTextDatum(pipelineName),
-		CStringGetTextDatum(prefix),
+		CStringGetTextDatum(pattern),
 		BoolGetDatum(batched)
 	};
-	char	   argNulls[] = "   ";
+	char		argNulls[] = "   ";
 
 	SPI_connect();
 	SPI_execute_with_args(query,
@@ -87,7 +87,7 @@ void
 ExecuteFileListPipeline(char *pipelineName, char *command)
 {
 	/* get the full fileList of data to process */
-	FileList *fileList = GetSafeFileList(pipelineName);
+	FileList   *fileList = GetSafeFileList(pipelineName);
 
 	if (fileList->files == NIL)
 	{
@@ -104,11 +104,11 @@ ExecuteFileListPipeline(char *pipelineName, char *command)
 	}
 	else
 	{
-		ListCell *fileCell = NULL;
+		ListCell   *fileCell = NULL;
 
 		foreach(fileCell, fileList->files)
 		{
-			char *path = lfirst(fileCell);
+			char	   *path = lfirst(fileCell);
 
 			ExecuteFileListPipelineForFile(pipelineName, command, path);
 			InsertProcessedFile(pipelineName, path);
@@ -160,7 +160,7 @@ static FileList *
 GetSafeFileList(char *pipelineName)
 {
 	MemoryContext outerContext = CurrentMemoryContext;
-	FileList *fileList = (FileList *) palloc0(sizeof(FileList));
+	FileList   *fileList = (FileList *) palloc0(sizeof(FileList));
 
 	Oid			savedUserId = InvalidOid;
 	int			savedSecurityContext = 0;
@@ -178,7 +178,7 @@ GetSafeFileList(char *pipelineName)
 	char	   *query =
 		"select path "
 		"from incremental.file_list_pipelines, "
-		"crunchy_lake.list_files(prefix) "
+		"crunchy_lake.list_files(file_pattern) "
 		"where pipeline_name operator(pg_catalog.=) $1 "
 		"and path not in ("
 		"select path from incremental.processed_files where pipeline_name operator(pg_catalog.=) $1"

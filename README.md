@@ -1,14 +1,44 @@
-# pg\_incremental: Fast, Reliable, Incremental Insert Processing in PostgreSQL
+# pg\_incremental: Incremental Data Processing in PostgreSQL
 
-When storing a stream of event data in PostgreSQL (e.g. IoT, time series), a common challenge is to process only the new inserts. For instance, you might want to create one or more rollup tables containing pre-aggregated data, and insert and update the aggregates as new data arrives. However, you cannot really know the data that is still being inserted by concurrent transactions, and immediately aggregating data when inserting (e.g. via triggers) is certain to create a concurrency bottleneck. When periodically repeating an aggregation, you also want to make sure that events are processed successfully exactly once, even when queries fail.
+pg\_incremental is a simple extension that helps you do fast, reliable, incremental batch processing in PostgreSQL.
 
-`pg_incremental` is a simple extension that helps you do fast, reliable, incremental batch processing of new rows in a PostgreSQL table.
+When storing an append-only stream of event data in PostgreSQL (e.g. IoT, time series), a common challenge is to process only the new data. For instance, you might want to create one or more summary tables containing pre-aggregated data, and insert or update aggregates as new data arrives. However, you cannot really know the data that is still being inserted by concurrent transactions, and immediately aggregating data when inserting (e.g. via triggers) is certain to create a concurrency bottleneck. When periodically repeating an aggregation, you also want to make sure that events are processed successfully exactly once, even when queries fail.
+
+A similar challenge exists with data coming in from cloud storage systems. New files show up in object storage, and they need to get processed or loaded into a table, exactly once.
+
+With pg\_incremental, you define a pipeline with a parameterized query. The pipeline is executed for all existing data when created, and then periodically executed. If there is new data, the query is executed with parameter values that correspond to the new data. Depending on the type of pipeline, the parameters could reflect a new range of sequence values, a new time range, or a new file.
+
+```
+-- Periodically aggregate data coming inserted into the events table into an events_agg table
+select incremental.create_sequence_pipeline('event-aggregation', 'events', $$
+  insert into events_agg
+  select date_trunc('day', event_time), count(*)
+  from events
+  where event_id between $1 and $2
+  group by 1
+  on conflict (day) do update set event_count = events_agg.event_count + excluded.event_count;
+$$);
+```
+
+While there are much more sophisticated solutions to this problems like incremental materialized views, they take years to develop and often come with many limitations and a lack of flexibility. We felt the need for a simple tool that gets the job done without a lot of boilerplate, and can mostly be fire-and-forget.
 
 ## Creating incremental processing pipelines
 
-To use `pg_incremental`, you need to have a bigserial / identity or timestamp column in your table, preferably with an index (e.g. btree / primary key, BRIN):
+There are 3 types of pipelines in pg\_incremental
 
-For example, consider this source table and rollup table:
+- **Sequence pipelines** - The pipeline query is executed for a range of sequence values, with a mechanism to ensure that no more new sequence values will fall in the range. These pipelines are most suitable for incrementally building summary tables.
+- **Time interval pipelines** - The pipeline query is executed for a time interval or range of time intervals, after the time interval has passed. These pipelines can be used for incrementally building summary tables or periodically exporting new data.
+- **File list pipelines** - The pipeline query is executed for a new file obtained from a file list function. These pipelines can be used to import new data.
+
+Each pipeline has a command with 1 or 2 parameters. The pipelines run periodically using [pg\_cron](https://github.com/citusdata/pg_cron) (every minute, by default) and execute the command only if there is new data to process. However, each pipeline execution will appear in `cron.job_run_details` regardless of whether there is new data.
+
+We describe each type of pipeline below.
+
+### Creating a sequence pipeline
+
+You can define a sequence pipeline with the `incremental.create_sequence_pipeline` function by specifying a generic pipeline name, the name of a source table name with a sequence or an explicit sequence name, and a command. The command you pass will be executed in a context where `$1` and `$2` are set to the lowest and highest value of a range of sequence values that can be safely aggregated.
+
+Example:
 ```sql
 -- create a source table
 create table events (
@@ -18,34 +48,21 @@ create table events (
   path text,
   response_time double precision
 );
+
+-- BRIN indexes are highly effective in selecting new ranges
 create index on events using brin (event_id);
-create index on events using brin (event_time);
 
 -- generate some random inserts
 insert into events (client_id, path, response_time)
 select s % 100, '/page-' || (s % 3), random() from generate_series(1,1000000) s;
 
--- create a rollup table to pre-aggregate the number of events per day
+-- create a summary table to pre-aggregate the number of events per day
 create table events_agg (
   hour timestamptz,
   event_count bigint,
   primary key (hour)
 );
 
-```
-
-There are two ways of creating a pipeline to incrementally aggregate new rows in the `events` table into the `events_agg` table:
-
-- Sequence pipelines - The pipeline query is executed with a range of sequence values
-- Time interval pipelines - The pipeline query is executed for a range of time intervals, after those time intervals have passed.
-
-Which pipeline is most suitable depends on your requirements and scenario. In general, sequence pipelines are more suitable for aggregating by a timestamp column that is not generated by the database itself (and you may have late data), since it will process rows in insertion order regardless of the timestamp. Time interval pipelines are more appropriate for processing the data in fixed size intervals, but are less tolerant to late data.
-
-### Creating a sequence pipeline
-
-You can define a sequence pipeline with the `incremental.create_sequence_pipeline` function by giving it the name of a source table name with a sequence, or an explicit sequence name. The query you pass will be executed in a context where $1 and $2 are set to the lowest and highest value of a range of sequence values that can be safely aggregated.
-
-```sql
 -- create a pipeline to aggregate new inserts from a postgres table using a sequence
 -- $1 and $2 will be set to the lowest and highest (inclusive) sequence values that can be aggregated
 
@@ -58,47 +75,170 @@ select incremental.create_sequence_pipeline('event-aggregation', 'events', $$
   on conflict (day) do update set event_count = events_agg.event_count + excluded.event_count;
 $$);
 ```
-Creating a pipeline automatically sets up a [pg_cron](https://github.com/citusdata/pg_cron) job that runs every minute by default (configurable) and runs the insert..select with an unprocessed sequence range. You can define multiple pipelines for the same source table to create different aggregations. 
 
-The pipeline execution ensures that the range of sequence values is safe, meaning that there are no more transactions that might produce sequence values that are within the range (it waits for ongoing transactions before proceeding with the command). The size of the range is effectively the number of inserts since the last time the pipeline was executed up to the moment that the new pipeline execution started.
+When creating the pipeline, the command is executed immediately for all sequence values starting from 0. Immediate execution can be disabled by passing `execute_immediately := false`, in which case the first execution will happen as part of periodic job scheduling.
+
+The pipeline execution ensures that the range of sequence values is known to be safe, meaning that there are no more transactions that might produce sequence values that are within the range. This is ensured by waiting for concurrent write transactions before proceeding with the command. The size of the range is effectively the number of inserts since the last time the pipeline was executed up to the moment that the new pipeline execution started. This technique was first introduced on the [Citus Data blog](https://www.citusdata.com/blog/2018/06/14/scalable-incremental-data-aggregation/) by the author of this extension.
 
 The benefit of sequence pipelines is that they can process the data in small incremental steps and it is agnostic to where the timestamps used in aggregations came from (i.e. late data is fine). The downside is that you almost always have to merge aggregates using an ON CONFLICT clause, and there are situations where that is not possible (e.g. exact distinct counts).
 
+Arguments of the `incremental.create_sequence_pipeline` function:
+
+| Argument name         | Type     | Description                                        | Default                      |
+| --------------------- | -------- | -------------------------------------------------- | ---------------------------- |
+| `pipeline_name`       | text     | Name of the pipeline that acts as an identifier    | Required                     |
+| `sequence_name`       | regclass | Name of a sequence or table with a sequence        | Required                     |
+| `command`             | text     | Pipeline command with $1 and $2 parameters         | Required                     |
+| `schedule`            | text     | pg\_cron schedule for periodic execution (or NULL) | `* * * * *` (every minute)   |
+| `execute_immediately` | bool     | Execute command immediately for existing data      | `true`                       |
+
 ### Creating a time interval pipeline
 
-You can define a time interval pipeline with the `incremental.create_time_interval_pipeline` function by giving it the name of a source table name with a time column. The query you pass will be executed in a context where $1 and $2 are set to the lowest and highest value of a range of sequence values that can be safely aggregated, because the pipeline execution makes sure that all ongoing transactions are only genearting higher values by waiting for table locks. 
-
+You can define a time interval pipeline with the `incremental.create_time_interval_pipeline` function by specifying a generic pipeline name, an interval, and a command. The command will be executed in a context where `$1` and `$2` are set to the start and end (exclusive) of a range of time intervals that has passed.
 
 Example:
 ```sql
--- create a pipeline to aggregate new inserts from a postgres table using a specified time interval
+-- continuing with the data model from the previous section, but with a time range pipeline
+
+-- BRIN indexes are highly effective in selecting new ranges
+create index on events using brin (event_time);
+
+-- create a pipeline to aggregate new inserts using a 1 day interval
 -- $1 and $2 will be set to the start and end (exclusive) of a range of time intervals that can be aggregated
 select incremental.create_time_interval_pipeline('event-aggregation', '1 day', $$
   insert into events_agg
-  select event_time::date, count(*)
+  select event_time::date, count(distinct event_id)
   from events
   where event_time >= $1 and event_time < $2
   group by 1
 $$);
 ```
 
-The command will be executed once per time interval. If multiple intervals have passed since the last pipeline execution, each will be processed in a separate transactions, but as part of the same execution. It is also possible to execute the command for a range of intervals at once by supplying a `batched := true` argument. In that case, the command usually needs to group by the time interval.
+When creating the pipeline, the command is executed immediately for the time starting from 2000-01-01 00:00:00 (configurable using the `start_time` argument). Immediate execution can be disabled by passing `execute_immediately := false`, in which case the first execution will happen as part of periodic job scheduling.
 
-The pipeline execution logic ensures that the range of time intervals is safe, _if the timestamp is generated by the database using now() and assuming no large clock jumps_ (usually safe in cloud environments). The size of the range is always a multiple of the time intervals. A time interval is processed after at least a minute has passed (configurable).
+The command is executed after a time interval has passed. If the interval is 1 day, then the data for the previous day is typically processed at 00:01:00 (delay is configurable). If the query fails multiple times, the range may expand to cover multiple unprocessed intervals, except when using `batched := false`.
 
-The benefit of time interval pipelines is that they can do more complex processing such as exact distinct counts and are also more suitable for periodically exporting data because the command always processed the same time range. The downside is that it you need to wait until after a time interval passes to see results and inserting old timestamps may cause data to be skipped. Sequence pipelines are more reliable in that sense.
+When using `batched := false`, the command is executed separately for each time interval. This can be useful to periodically export a specific time interval. It's important to pick a `start_time` that's close to the lowest timestamp in the data to avoid executing the command many times for all the intervals that have passed.
+
+```sql
+-- define an export function that wraps a COPY command
+create function export_events(start_time timestamptz, end_time timestamptz)
+returns void language plpgsql as $function$
+declare
+  path text := format('/tmp/export/%s.csv', start_time::date);
+begin
+  execute format($$copy (select * from events where event_time >= start_time and event_time < end_time) to %L$$, path);
+end;
+$function$;
+
+-- create a pipeline to aggregate new inserts using a specified time interval
+-- $1 and $2 will be set to the start and end (exclusive) of a range of time intervals that can be aggregated
+select incremental.create_time_interval_pipeline('event-aggregation', '1 day', $$
+  insert into events_agg
+  select event_time::date, count(distinct event_id)
+  from events
+  where event_time >= $1 and event_time < $2
+  group by 1
+$$);
+```
+
+The pipeline execution logic can also ensure that the range of time intervals is safe, _if the timestamp is generated by the database using now() and assuming no large clock jumps_ (usually safe in cloud environments). In that case, the caller should set the `source_table_name` argument to the name of the source table. The pipeline execution will then wait for concurrent writers to finish before executing the command.
+
+```sql
+-- create a pipeline to aggregate new inserts using a 1 day interval
+-- also ensure that there are no uncomitted event_time values by specifying source_table_name
+select incremental.create_time_interval_pipeline('event-aggregation',
+  time_interval := '1 day',
+  source_table_name := 'events',
+  command := $$
+    ...
+  $$);
+```
+
+The benefit of time interval pipelines is that they can do more complex processing such as exact distinct counts and are also more suitable for periodically exporting data because the command always processed the same time range. The downside is that it you need to wait until after a time interval passes to see results and inserting old timestamps may cause data to be skipped. Sequence pipelines are more reliable in that sense because the values are always generated by the database.
+
+Arguments of the `incremental.create_time_range_pipeline` function:
+
+| Argument name         | Type        | Description                                        | Default                    |
+| --------------------- | ----------- | -------------------------------------------------- | -------------------------- |
+| `pipeline_name`       | text        | User-defined name of the pipeline                  | Required                   |
+| `time_interval`       | interval    | At which interval to execute the pipeline          | Required                   |
+| `command`             | text        | Pipeline command with $1 and $2 parameters         | Required                   |
+| `batched`             | text        | Whether to run the command for multiple intervals  | `true`                     |
+| `start_time`          | timestamptz | Time from which the intervals start                | `2000-01-01 00:00:00`      |
+| `source_table_name`   | regclass    | Wait for lockers of this table before aggregation  | NULL (no waiting)          |
+| `schedule`            | text        | pg\_cron schedule for periodic execution (or NULL) | `* * * * *` (every minute) |
+| `execute_immediately` | bool        | Execute command immediately for existing data      | `true`                     |
+
+### Creating a file list pipeline (PREVIEW)
+
+You can define a file list pipeline with the `incremental.create_file_list_pipeline` function by specifying a generic pipeline name, a file pattern, and a query. The query will be executed after an interval has passed. By default the time range reflected by parameter values will be "batched", meaning there can be multiple intervals processed at once. An alternative is to execute the query separately for every interval (useful in export scenarios).
+
+Example:
+```sql
+-- define an import function that wraps a COPY command
+create function import_events(path text)
+returns void language plpgsql as $function$
+begin
+	execute format($$copy events from %L$$, path);
+end;
+$function$;
+
+-- create a pipeline to import new files into a table, one by one.
+-- $1 will be set to the path of a new file
+select incremental.create_file_list_pipeline('event-import', 's3://mybucket/events/inbox/*.csv', $$
+   select import_events($1)
+$$);
+```
+
+The API of the file list pipeline is still subject to change. It is currently only usable in [Crunchy Data Warehouse](https://www.crunchydata.com/products/warehouse) where it uses the [`crunchy_lake.list_files` function](https://docs.crunchybridge.com/warehouse/data-lake#explore-your-object-store-files).
+
+Arguments of the `incremental.create_file_list_pipeline` function:
+
+| Argument name         | Type        | Description                                         | Default                     |
+| --------------------- | ----------- | --------------------------------------------------- | --------------------------- |
+| `pipeline_name`       | text        | User-defined name of the pipeline                   | Required                    |
+| `file_pattern`        | text        | File pattern to pass to the list function           | Required                    |
+| `command`             | text        | Pipeline command with $1 and $2 parameters          | Required                    |
+| `schedule`            | text        | pg\_cron schedule for periodic execution (or NULL)  | `* * * * *` (every minute)  |
+| `execute_immediately` | bool        | Execute command immediately for existing data       | `true`                      |
+
+
+## Executing a pipeline
+
+You can also execute a pipeline manually, though it will only run the command if there is new data to process.
+
+```sql
+select incremental.execute_pipeline('event-aggregation');
+```
+
+When you create the pipeline, you can pass `schedule := NULL` to disable periodic scheduling, such that you can perform all executions manually.
+
+Arguments of the `incremental.execute_pipeline` function:
+
+| Argument name         | Type        | Description                                       | Default                     |
+| --------------------- | ----------- | ------------------------------------------------- | --------------------------- |
+| `pipeline_name`       | text        | User-defined name of the pipeline                 | Required                    |
+
 
 ## Resetting an incremental processing pipelines
 
 If you need to rebuild an aggregation you can reset a pipeline to the beginning.
 ```sql
--- Reset a rollup
+-- Clear the summary table and reset the pipeline to rebuild it
 begin;
-truncate events_agg;
+delete from events_agg;
 select incremental.reset_pipeline('event-aggregation');
 commit;
 ```
-The next time the pipeline runs, the start of the sequence value range will be set to 0 to reprocess all rows.
+The pipeline will be executed from the start. If execution fails, the pipeline is not reset.
+
+Arguments of the `incremental.reset_pipeline` function:
+
+| Argument name         | Type        | Description                                       | Default                     |
+| --------------------- | ----------- | ------------------------------------------------- | --------------------------- |
+| `pipeline_name`       | text        | User-defined name of the pipeline                 | Required                    |
+| `execute_immediately` | bool        | Execute command immediately for existing data     | `false`                     |
 
 ## Dropping an incremental processing pipelines
 
@@ -107,3 +247,10 @@ When you are done with a pipeline, you can drop it using `incremental.drop_pipli
 -- Drop the pipeline
 select incremental.drop_pipeline('event-aggregation');
 ```
+
+Arguments of the `incremental.drop_pipeline` function:
+
+| Argument name         | Type        | Description                                       | Default                     |
+| --------------------- | ----------- | ------------------------------------------------- | --------------------------- |
+| `pipeline_name`       | text        | User-defined name of the pipeline                 | Required                    |
+
