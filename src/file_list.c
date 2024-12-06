@@ -5,9 +5,11 @@
 
 #include "catalog/dependency.h"
 #include "catalog/pg_authid.h"
+#include "catalog/pg_proc.h"
 #include "crunchy/incremental/file_list.h"
 #include "crunchy/incremental/pipeline.h"
 #include "executor/spi.h"
+#include "parser/parse_func.h"
 #include "storage/lmgr.h"
 #include "storage/lock.h"
 #include "utils/acl.h"
@@ -15,7 +17,9 @@
 #include "utils/fmgrprotos.h"
 #include "utils/lsyscache.h"
 #include "utils/palloc.h"
+#include "utils/regproc.h"
 #include "utils/rel.h"
+#include "utils/syscache.h"
 
 
 /*
@@ -29,7 +33,9 @@ typedef struct FileList
 
 
 static void ExecuteFileListPipelineForFile(char *pipelineName, char *command, char *path);
-static FileList * GetSafeFileList(char *pipelineName);
+static FileList * GetUnprocessedFilesForPipeline(char *pipelineName);
+static List *GetUnprocessedFileList(char *pipelineName, char *listFunction,
+									char *filePattern);
 static void InsertProcessedFile(char *pipelineName, char *path);
 
 
@@ -38,7 +44,8 @@ static void InsertProcessedFile(char *pipelineName, char *path);
  * InitializeFileListPipelineState adds the initial file list pipeline state.
  */
 void
-InitializeFileListPipelineState(char *pipelineName, char *pattern, bool batched)
+InitializeFileListPipelineState(char *pipelineName, char *pattern, bool batched,
+								char *listFunction)
 {
 	Oid			savedUserId = InvalidOid;
 	int			savedSecurityContext = 0;
@@ -52,19 +59,20 @@ InitializeFileListPipelineState(char *pipelineName, char *pattern, bool batched)
 
 	char	   *query =
 		"insert into incremental.file_list_pipelines "
-		"(pipeline_name, file_pattern, batched) "
-		"values ($1, $2, $3)";
+		"(pipeline_name, file_pattern, batched, list_function) "
+		"values ($1, $2, $3, $4)";
 
 	bool		readOnly = false;
 	int			tupleCount = 0;
-	int			argCount = 3;
-	Oid			argTypes[] = {TEXTOID, TEXTOID, BOOLOID};
+	int			argCount = 4;
+	Oid			argTypes[] = {TEXTOID, TEXTOID, BOOLOID, TEXTOID};
 	Datum		argValues[] = {
 		CStringGetTextDatum(pipelineName),
 		CStringGetTextDatum(pattern),
-		BoolGetDatum(batched)
+		BoolGetDatum(batched),
+		CStringGetTextDatum(listFunction)
 	};
-	char		argNulls[] = "   ";
+	char		argNulls[] = "    ";
 
 	SPI_connect();
 	SPI_execute_with_args(query,
@@ -87,7 +95,7 @@ void
 ExecuteFileListPipeline(char *pipelineName, char *command)
 {
 	/* get the full fileList of data to process */
-	FileList   *fileList = GetSafeFileList(pipelineName);
+	FileList   *fileList = GetUnprocessedFilesForPipeline(pipelineName);
 
 	if (fileList->files == NIL)
 	{
@@ -153,14 +161,13 @@ ExecuteFileListPipelineForFile(char *pipelineName, char *command, char *path)
 
 
 /*
- * GetSafeFileList reads the current state of the given sequence pipeline
- * and returns whether there are rows to process.
+ * GetUnprocessedFilesForPipeline returns the list of files that are not
+ * yet processed.
  */
 static FileList *
-GetSafeFileList(char *pipelineName)
+GetUnprocessedFilesForPipeline(char *pipelineName)
 {
 	MemoryContext outerContext = CurrentMemoryContext;
-	FileList   *fileList = (FileList *) palloc0(sizeof(FileList));
 
 	Oid			savedUserId = InvalidOid;
 	int			savedSecurityContext = 0;
@@ -173,16 +180,13 @@ GetSafeFileList(char *pipelineName)
 	SetUserIdAndSecContext(BOOTSTRAP_SUPERUSERID, SECURITY_LOCAL_USERID_CHANGE);
 
 	/*
-	 * Get the unprocessed files.
+	 * Get the file list pipeline properties.
 	 */
 	char	   *query =
-		"select path "
-		"from incremental.file_list_pipelines, "
-		"crunchy_lake.list_files(file_pattern) "
+		"select batched, list_function, file_pattern "
+		"from incremental.file_list_pipelines "
 		"where pipeline_name operator(pg_catalog.=) $1 "
-		"and path not in ("
-		"select path from incremental.processed_files where pipeline_name operator(pg_catalog.=) $1"
-		")";
+		"for update";
 
 	bool		readOnly = false;
 	int			tupleCount = 0;
@@ -202,9 +206,94 @@ GetSafeFileList(char *pipelineName)
 						  readOnly,
 						  tupleCount);
 
+	if (SPI_processed <= 0)
+		ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT),
+						errmsg("pipeline \"%s\" cannot be found",
+							   pipelineName)));
+
+	TupleDesc	rowDesc = SPI_tuptable->tupdesc;
+	HeapTuple	row = SPI_tuptable->vals[0];
+
+	bool		isNull = false;
+	Datum		batchedDatum = SPI_getbinval(row, rowDesc, 1, &isNull);
+	Datum		listFunctionDatum = SPI_getbinval(row, rowDesc, 2, &isNull);
+	Datum		filePatternDatum = SPI_getbinval(row, rowDesc, 3, &isNull);
+
+	MemoryContext oldContext = MemoryContextSwitchTo(outerContext);
+
+	bool		batched = DatumGetBool(batchedDatum);
+	char	   *listFunction = TextDatumGetCString(listFunctionDatum);
+	char	   *filePattern = TextDatumGetCString(filePatternDatum);
+
+	MemoryContextSwitchTo(oldContext);
+
+	SPI_finish();
+
+	SetUserIdAndSecContext(savedUserId, savedSecurityContext);
+
+	FileList   *fileList = (FileList *) palloc0(sizeof(FileList));
+
+	fileList->batched = batched;
+	fileList->files = GetUnprocessedFileList(pipelineName, listFunction, filePattern);
+
+	return fileList;
+}
+
+
+/*
+ * GetUnprocessedFileList lists the current set of files and subtracts
+ * the already processed files,
+ */
+static List *
+GetUnprocessedFileList(char *pipelineName, char *listFunction, char *filePattern)
+{
+	List	   *fileList = NIL;
+	MemoryContext outerContext = CurrentMemoryContext;
+
+	Oid			savedUserId = InvalidOid;
+	int			savedSecurityContext = 0;
+
+	/*
+	 * Switch to superuser in case the current user does not have write
+	 * privileges for the pipelines table.
+	 */
+	GetUserIdAndSecContext(&savedUserId, &savedSecurityContext);
+	SetUserIdAndSecContext(BOOTSTRAP_SUPERUSERID, SECURITY_LOCAL_USERID_CHANGE);
+
+	/*
+	 * Get the unprocessed files.
+	 */
+	StringInfo	query = makeStringInfo();
+
+	appendStringInfo(query,
+					 "select path "
+					 "from %s($2) "
+					 "where path not in ("
+					 "select path from incremental.processed_files where pipeline_name operator(pg_catalog.=) $1"
+					 ")",
+					 listFunction);
+
+	bool		readOnly = false;
+	int			tupleCount = 0;
+	int			argCount = 2;
+	Oid			argTypes[] = {TEXTOID, TEXTOID};
+	Datum		argValues[] = {
+		CStringGetTextDatum(pipelineName),
+		CStringGetTextDatum(filePattern)
+	};
+	char	   *argNulls = "  ";
+
+	SPI_connect();
+	SPI_execute_with_args(query->data,
+						  argCount,
+						  argTypes,
+						  argValues,
+						  argNulls,
+						  readOnly,
+						  tupleCount);
+
 	TupleDesc	rowDesc = SPI_tuptable->tupdesc;
 
-	/* TODO: maybe return as array */
 	for (int rowIndex = 0; rowIndex < SPI_processed; rowIndex++)
 	{
 		HeapTuple	row = SPI_tuptable->vals[0];
@@ -214,7 +303,7 @@ GetSafeFileList(char *pipelineName)
 
 		MemoryContext oldContext = MemoryContextSwitchTo(outerContext);
 
-		fileList->files = lappend(fileList->files, TextDatumGetCString(pathDatum));
+		fileList = lappend(fileList, TextDatumGetCString(pathDatum));
 
 		MemoryContextSwitchTo(oldContext);
 	}
@@ -223,7 +312,6 @@ GetSafeFileList(char *pipelineName)
 
 	SetUserIdAndSecContext(savedUserId, savedSecurityContext);
 
-	/* return whether there are rows to process */
 	return fileList;
 }
 
@@ -333,4 +421,31 @@ RemoveProcessedFileList(char *pipelineName)
 	SPI_finish();
 
 	SetUserIdAndSecContext(savedUserId, savedSecurityContext);
+}
+
+
+/*
+ * SanitizeListFunction qualifies a list function name and errors
+ * if the function cannot be found.
+ */
+char *
+SanitizeListFunction(char *listFunction)
+{
+	List	   *names = stringToQualifiedNameList(listFunction, NULL);
+	Oid			argTypes[] = {TEXTOID};
+	bool		missingOk = false;
+	Oid			functionId = LookupFuncName(names, 1, argTypes, missingOk);
+
+	HeapTuple	procTuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(functionId));
+
+	if (!HeapTupleIsValid(procTuple))
+		elog(ERROR, "could not find function with OID %d", functionId);
+
+	Form_pg_proc procForm = (Form_pg_proc) GETSTRUCT(procTuple);
+	char	   *functionName = NameStr(procForm->proname);
+	char	   *schemaName = get_namespace_name(procForm->pronamespace);
+
+	ReleaseSysCache(procTuple);
+
+	return quote_qualified_identifier(schemaName, functionName);
 }

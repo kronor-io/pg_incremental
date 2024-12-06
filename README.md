@@ -172,7 +172,7 @@ Arguments of the `incremental.create_time_range_pipeline` function:
 
 ### Creating a file list pipeline (PREVIEW)
 
-You can define a file list pipeline with the `incremental.create_file_list_pipeline` function by specifying a generic pipeline name, a file pattern, and a command. The command will be executed in a context where `$1` is set to the path of a new file (text). The pipeline periodically looks for new files returned by a list function and then executes the command for each new file.
+You can define a file list pipeline with the `incremental.create_file_list_pipeline` function by specifying a generic pipeline name, a file pattern, and a command. The command will be executed in a context where `$1` is set to the path of a file (text). The pipeline periodically looks for new files returned by a list function and then executes the command for each new file.
 
 Example:
 ```sql
@@ -201,6 +201,7 @@ Arguments of the `incremental.create_file_list_pipeline` function:
 | `file_pattern`        | text        | File pattern to pass to the list function           | Required                    |
 | `command`             | text        | Pipeline command with $1 and $2 parameters          | Required                    |
 | `batched`             | bool        | Currently unused                                    | `false`                     |
+| `list_function`       | text        | Name of the function used to list files             | `crunchy_lake.list_files`   |
 | `schedule`            | text        | pg\_cron schedule for periodic execution (or NULL)  | `* * * * *` (every minute)  |
 | `execute_immediately` | bool        | Execute command immediately for existing data       | `true`                      |
 

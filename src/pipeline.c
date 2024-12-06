@@ -202,19 +202,25 @@ incremental_create_file_list_pipeline(PG_FUNCTION_ARGS)
 		ereport(ERROR, (errmsg("prefix cannot be NULL")));
 	if (PG_ARGISNULL(2))
 		ereport(ERROR, (errmsg("command cannot be NULL")));
+	if (PG_ARGISNULL(4))
+		ereport(ERROR, (errmsg("list_function cannot be NULL")));
 
 	char	   *pipelineName = text_to_cstring(PG_GETARG_TEXT_P(0));
 	char	   *prefix = text_to_cstring(PG_GETARG_TEXT_P(1));
 	char	   *command = text_to_cstring(PG_GETARG_TEXT_P(2));
 	bool		batched = PG_ARGISNULL(3) ? false : PG_GETARG_BOOL(3);
-	char	   *schedule = PG_ARGISNULL(4) ? NULL : text_to_cstring(PG_GETARG_TEXT_P(4));
-	bool		executeImmediately = PG_ARGISNULL(5) ? false : PG_GETARG_BOOL(5);
+	char	   *listFunction = text_to_cstring(PG_GETARG_TEXT_P(4));
+	char	   *schedule = PG_ARGISNULL(5) ? NULL : text_to_cstring(PG_GETARG_TEXT_P(5));
+	bool		executeImmediately = PG_ARGISNULL(6) ? false : PG_GETARG_BOOL(6);
 
 	if (batched)
 	{
 		ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						errmsg("batched file pipelines are not yet supported")));
 	}
+
+	/* validate and sanitize function name */
+	listFunction = SanitizeListFunction(listFunction);
 
 	List	   *paramTypes = list_make1_oid(TEXTOID);
 
@@ -223,7 +229,7 @@ incremental_create_file_list_pipeline(PG_FUNCTION_ARGS)
 	char	   *sanitizedCommand = DeparseQuery(parsedQuery);
 
 	InsertPipeline(pipelineName, FILE_LIST_PIPELINE, InvalidOid, sanitizedCommand);
-	InitializeFileListPipelineState(pipelineName, prefix, batched);
+	InitializeFileListPipelineState(pipelineName, prefix, batched, listFunction);
 
 	if (executeImmediately)
 		ExecutePipeline(pipelineName, FILE_LIST_PIPELINE, sanitizedCommand);
@@ -242,7 +248,6 @@ incremental_create_file_list_pipeline(PG_FUNCTION_ARGS)
 
 	PG_RETURN_VOID();
 }
-
 
 
 /*

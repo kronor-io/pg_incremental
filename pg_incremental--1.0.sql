@@ -37,6 +37,7 @@ CREATE TABLE incremental.file_list_pipelines (
     pipeline_name text not null references incremental.pipelines (pipeline_name) on delete cascade on update cascade,
     file_pattern text not null,
     batched bool not null default false,
+    list_function text not null,
     primary key (pipeline_name)
 );
 GRANT SELECT ON incremental.file_list_pipelines TO public;
@@ -84,12 +85,13 @@ CREATE FUNCTION incremental.create_file_list_pipeline(
     file_pattern text,
     command text,
     batched bool default false,
+    list_function text default 'crunchy_lake.list_files',
     schedule text default '* * * * *',
     execute_immediately bool default true)
  RETURNS void
  LANGUAGE C
 AS 'MODULE_PATHNAME', $function$incremental_create_file_list_pipeline$function$;
-COMMENT ON FUNCTION incremental.create_file_list_pipeline(text,text,text,bool,text,bool)
+COMMENT ON FUNCTION incremental.create_file_list_pipeline(text,text,text,bool,text,text,bool)
  IS 'create a pipeline of new files';
 
 CREATE PROCEDURE incremental.execute_pipeline(
