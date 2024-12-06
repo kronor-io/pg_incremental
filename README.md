@@ -20,7 +20,7 @@ select incremental.create_sequence_pipeline('event-aggregation', 'events', $$
 $$);
 ```
 
-While there are much more sophisticated approaches to this problems like incremental materialized views or logical decoding-based solutions, they take a long time to develop and often come with many limitations and a lack of flexibility. We felt the need for a simple tool that gets the job done without a lot of boilerplate, and can mostly be fire and forget.
+While there are much more sophisticated approaches to this problems like incremental materialized views or logical decoding-based solutions, they take a long time to develop and often come with many limitations and a lack of flexibility. We felt the need for a simple, fire and forget tool that gets the job done without a lot of boilerplate.
 
 ## Creating incremental processing pipelines
 
@@ -28,7 +28,7 @@ There are 3 types of pipelines in pg\_incremental
 
 - **Sequence pipelines** - The pipeline query is executed for a range of sequence values, with a mechanism to ensure that no more new sequence values will fall in the range. These pipelines are most suitable for incrementally building summary tables.
 - **Time interval pipelines** - The pipeline query is executed for a time interval or range of time intervals, after the time interval has passed. These pipelines can be used for incrementally building summary tables or periodically exporting new data.
-- **File list pipelines** - The pipeline query is executed for a new file obtained from a file list function. These pipelines can be used to import new data.
+- **File list pipelines (PREVIEW)** - The pipeline query is executed for a new file obtained from a file list function. These pipelines can be used to import new data.
 
 Each pipeline has a command with 1 or 2 parameters. The pipelines run periodically using [pg\_cron](https://github.com/citusdata/pg_cron) (every minute, by default) and execute the command only if there is new data to process. However, each pipeline execution will appear in `cron.job_run_details` regardless of whether there is new data.
 
@@ -36,7 +36,7 @@ We describe each type of pipeline below.
 
 ### Creating a sequence pipeline
 
-You can define a sequence pipeline with the `incremental.create_sequence_pipeline` function by specifying a generic pipeline name, the name of a source table name with a sequence or an explicit sequence name, and a command. The command you pass will be executed in a context where `$1` and `$2` are set to the lowest and highest value of a range of sequence values that can be safely aggregated.
+You can define a sequence pipeline with the `incremental.create_sequence_pipeline` function by specifying a generic pipeline name, the name of a source table name with a sequence or an explicit sequence name, and a command. The command you pass will be executed in a context where `$1` and `$2` are set to the lowest and highest value of a range of sequence values that can be safely aggregated (bigint).
 
 Example:
 ```sql
@@ -58,7 +58,7 @@ select s % 100, '/page-' || (s % 3), random() from generate_series(1,1000000) s;
 
 -- create a summary table to pre-aggregate the number of events per day
 create table events_agg (
-  hour timestamptz,
+  day timestamptz,
   event_count bigint,
   primary key (hour)
 );
@@ -94,7 +94,7 @@ Arguments of the `incremental.create_sequence_pipeline` function:
 
 ### Creating a time interval pipeline
 
-You can define a time interval pipeline with the `incremental.create_time_interval_pipeline` function by specifying a generic pipeline name, an interval, and a command. The command will be executed in a context where `$1` and `$2` are set to the start and end (exclusive) of a range of time intervals that has passed.
+You can define a time interval pipeline with the `incremental.create_time_interval_pipeline` function by specifying a generic pipeline name, an interval, and a command. The command will be executed in a context where `$1` and `$2` are set to the start and end (exclusive) of a range of time intervals that has passed (timestamptz).
 
 Example:
 ```sql
@@ -118,7 +118,7 @@ When creating the pipeline, the command is executed immediately for the time sta
 
 The command is executed after a time interval has passed. If the interval is 1 day, then the data for the previous day is typically processed at 00:01:00 (delay is configurable). If the query fails multiple times, the range may expand to cover multiple unprocessed intervals, except when using `batched := false`.
 
-When using `batched := false`, the command is executed separately for each time interval. This can be useful to periodically export a specific time interval. It's important to pick a `start_time` that's close to the lowest timestamp in the data to avoid executing the command many times for all the intervals that have passed.
+When using `batched := false`, the command is executed separately for each time interval. This can be useful to periodically export a specific time interval. It's important to pick a `start_time` that's close to the lowest timestamp in the data to avoid executing the command many times redundantly for intervals that have passed but have no data.
 
 ```sql
 -- define an export function that wraps a COPY command
@@ -132,6 +132,7 @@ end;
 $function$;
 
 -- Export events daily to a CSV file, starting from 2024-11-01
+-- The command is executed separately for each interval
 select incremental.create_time_interval_pipeline('event-export',
   time_interval := '1 day',
   batched := false,
@@ -144,7 +145,7 @@ The pipeline execution logic can also ensure that the range of time intervals is
 
 ```sql
 -- create a pipeline to aggregate new inserts using a 1 day interval
--- also ensure that there are no uncomitted event_time values by specifying source_table_name
+-- also ensure that there are no uncommitted event_time values in the range by specifying source_table_name
 select incremental.create_time_interval_pipeline('event-aggregation',
   time_interval := '1 day',
   source_table_name := 'events',
@@ -153,7 +154,7 @@ select incremental.create_time_interval_pipeline('event-aggregation',
   $$);
 ```
 
-The benefit of time interval pipelines is that they can do more complex processing such as exact distinct counts and are also more suitable for periodically exporting data because the command always processed the same time range. The downside is that it you need to wait until after a time interval passes to see results and inserting old timestamps may cause data to be skipped. Sequence pipelines are more reliable in that sense because the values are always generated by the database.
+The benefit of time interval pipelines is that they are easier to define and can do more complex processing such as exact distinct counts and are also more suitable for exporting data because the command always processes exact time ranges. The downside is that you need to wait until after a time interval passes to see results and inserting old timestamps may cause data to be skipped. Sequence pipelines are more reliable in that sense because the values are always generated by the database.
 
 Arguments of the `incremental.create_time_range_pipeline` function:
 
@@ -171,7 +172,7 @@ Arguments of the `incremental.create_time_range_pipeline` function:
 
 ### Creating a file list pipeline (PREVIEW)
 
-You can define a file list pipeline with the `incremental.create_file_list_pipeline` function by specifying a generic pipeline name, a file pattern, and a query. The query will be executed after an interval has passed. By default the time range reflected by parameter values will be "batched", meaning there can be multiple intervals processed at once. An alternative is to execute the query separately for every interval (useful in export scenarios).
+You can define a file list pipeline with the `incremental.create_file_list_pipeline` function by specifying a generic pipeline name, a file pattern, and a command. The command will be executed in a context where `$1` is set to the path of a new file (text). The pipeline periodically looks for new files returned by a list function and then executes the command for each new file.
 
 Example:
 ```sql
@@ -199,6 +200,7 @@ Arguments of the `incremental.create_file_list_pipeline` function:
 | `pipeline_name`       | text        | User-defined name of the pipeline                   | Required                    |
 | `file_pattern`        | text        | File pattern to pass to the list function           | Required                    |
 | `command`             | text        | Pipeline command with $1 and $2 parameters          | Required                    |
+| `batched`             | bool        | Currently unused                                    | `false`                     |
 | `schedule`            | text        | pg\_cron schedule for periodic execution (or NULL)  | `* * * * *` (every minute)  |
 | `execute_immediately` | bool        | Execute command immediately for existing data       | `true`                      |
 
@@ -237,7 +239,7 @@ Arguments of the `incremental.reset_pipeline` function:
 | Argument name         | Type        | Description                                       | Default                     |
 | --------------------- | ----------- | ------------------------------------------------- | --------------------------- |
 | `pipeline_name`       | text        | User-defined name of the pipeline                 | Required                    |
-| `execute_immediately` | bool        | Execute command immediately for existing data     | `false`                     |
+| `execute_immediately` | bool        | Execute command immediately for existing data     | `true`                      |
 
 ## Dropping an incremental processing pipelines
 
