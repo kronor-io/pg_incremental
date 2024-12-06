@@ -8,7 +8,7 @@ A similar challenge exists with data coming in from cloud storage systems. New f
 
 With pg\_incremental, you define a pipeline with a parameterized query. The pipeline is executed for all existing data when created, and then periodically executed. If there is new data, the query is executed with parameter values that correspond to the new data. Depending on the type of pipeline, the parameters could reflect a new range of sequence values, a new time range, or a new file.
 
-```
+```sql
 -- Periodically aggregate data coming inserted into the events table into an events_agg table
 select incremental.create_sequence_pipeline('event-aggregation', 'events', $$
   insert into events_agg
