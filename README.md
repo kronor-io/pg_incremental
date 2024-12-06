@@ -9,7 +9,7 @@ A similar challenge exists with data coming in from cloud storage systems. New f
 With pg\_incremental, you define a pipeline with a parameterized query. The pipeline is executed for all existing data when created, and then periodically executed. If there is new data, the query is executed with parameter values that correspond to the new data. Depending on the type of pipeline, the parameters could reflect a new range of sequence values, a new time range, or a new file.
 
 ```sql
--- Periodically aggregate data coming inserted into the events table into an events_agg table
+-- Periodically aggregate rows inserted into the events table into an events_agg table
 select incremental.create_sequence_pipeline('event-aggregation', 'events', $$
   insert into events_agg
   select date_trunc('day', event_time), count(*)
@@ -19,6 +19,8 @@ select incremental.create_sequence_pipeline('event-aggregation', 'events', $$
   on conflict (day) do update set event_count = events_agg.event_count + excluded.event_count;
 $$);
 ```
+
+The internal progress tracking is done in the same transaction as the command, which ensures exactly once delivery.
 
 While there are much more sophisticated approaches to this problems like incremental materialized views or logical decoding-based solutions, they take a long time to develop and often come with many limitations and a lack of flexibility. We felt the need for a simple, fire and forget tool that gets the job done without a lot of boilerplate.
 
