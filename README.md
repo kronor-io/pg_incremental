@@ -20,7 +20,7 @@ select incremental.create_sequence_pipeline('event-aggregation', 'events', $$
 $$);
 ```
 
-While there are much more sophisticated solutions to this problems like incremental materialized views, they take years to develop and often come with many limitations and a lack of flexibility. We felt the need for a simple tool that gets the job done without a lot of boilerplate, and can mostly be fire-and-forget.
+While there are much more sophisticated approaches to this problems like incremental materialized views or logical decoding-based solutions, they take a long time to develop and often come with many limitations and a lack of flexibility. We felt the need for a simple tool that gets the job done without a lot of boilerplate, and can mostly be fire and forget.
 
 ## Creating incremental processing pipelines
 
