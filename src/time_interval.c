@@ -16,6 +16,7 @@
 #include "utils/lsyscache.h"
 #include "utils/palloc.h"
 #include "utils/rel.h"
+#include "utils/snapmgr.h"
 #include "utils/timestamp.h"
 
 
