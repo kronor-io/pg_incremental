@@ -2,7 +2,7 @@
 
 pg\_incremental is a simple extension that helps you do fast, reliable, incremental batch processing in PostgreSQL.
 
-When storing an append-only stream of event data in PostgreSQL (e.g. IoT, time series), a common challenge is to process only the new data. For instance, you might want to create one or more summary tables containing pre-aggregated data, and insert or update aggregates as new data arrives. However, you cannot really know the data that is still being inserted by concurrent transactions, and immediately aggregating data when inserting (e.g. via triggers) is certain to create a concurrency bottleneck. When periodically repeating an aggregation, you also want to make sure that events are processed successfully exactly once, even when queries fail.
+When storing an append-only stream of event data in PostgreSQL (e.g. IoT, time series), a common challenge is to process only the new data. For instance, you might want to create one or more summary tables containing pre-aggregated data, and insert or update aggregates as new data arrives. However, you cannot really know the data that is still being inserted by concurrent transactions, and immediately aggregating data when inserting (e.g. via triggers) is certain to create a concurrency bottleneck. You also want to make sure that all new events are processed successfully exactly once, even when queries fail.
 
 A similar challenge exists with data coming in from cloud storage systems. New files show up in object storage, and they need to get processed or loaded into a table, exactly once.
 
