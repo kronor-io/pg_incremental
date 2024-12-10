@@ -19,8 +19,8 @@
 #include "utils/palloc.h"
 #include "utils/regproc.h"
 #include "utils/rel.h"
-#include "utils/syscache.h"
 #include "utils/snapmgr.h"
+#include "utils/syscache.h"
 
 
 /*
