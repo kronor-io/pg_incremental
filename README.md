@@ -22,7 +22,7 @@ $$);
 
 The internal progress tracking is done in the same transaction as the command, which ensures exactly once delivery.
 
-While there are much more sophisticated approaches to this problems like incremental materialized views or logical decoding-based solutions, they take a long time to develop and often come with many limitations and a lack of flexibility. We felt the need for a simple, fire and forget tool that gets the job done without a lot of boilerplate.
+While there are much more sophisticated approaches to this problem like incremental materialized views or logical decoding-based solutions, they come with many limitations and a lack of flexibility. We felt the need for a simple, fire-and-forget tool that gets the job done without a lot of boilerplate.
 
 ## Creating incremental processing pipelines
 
