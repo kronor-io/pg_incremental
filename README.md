@@ -193,7 +193,7 @@ select incremental.create_file_list_pipeline('event-import', 's3://mybucket/even
 $$);
 ```
 
-The API of the file list pipeline is still subject to change. It is currently only usable in [Crunchy Data Warehouse](https://www.crunchydata.com/products/warehouse) where it uses the [`crunchy_lake.list_files` function](https://docs.crunchybridge.com/warehouse/data-lake#explore-your-object-store-files).
+The API of the file list pipeline is still subject to change. It currently defaults to using the [`crunchy_lake.list_files` function](https://docs.crunchybridge.com/warehouse/data-lake#explore-your-object-store-files) function in [Crunchy Data Warehouse](https://www.crunchydata.com/products/warehouse). You can set the list function to another set-returning function that returns a `path` value as `text`.
 
 Arguments of the `incremental.create_file_list_pipeline` function:
 
