@@ -50,7 +50,7 @@ incremental_create_sequence_pipeline(PG_FUNCTION_ARGS)
 	if (PG_ARGISNULL(0))
 		ereport(ERROR, (errmsg("pipeline_name cannot be NULL")));
 	if (PG_ARGISNULL(1))
-		ereport(ERROR, (errmsg("sequence_name cannot be NULL")));
+		ereport(ERROR, (errmsg("source_table_name cannot be NULL")));
 	if (PG_ARGISNULL(2))
 		ereport(ERROR, (errmsg("command cannot be NULL")));
 
@@ -64,6 +64,10 @@ incremental_create_sequence_pipeline(PG_FUNCTION_ARGS)
 
 	switch (get_rel_relkind(sequenceId))
 	{
+			/*
+			 * We allow source_table_name to be a sequence, and this is
+			 * necessary if there are multiple sequences.
+			 */
 		case RELKIND_SEQUENCE:
 			{
 				int32		columnNumber = 0;
@@ -71,7 +75,7 @@ incremental_create_sequence_pipeline(PG_FUNCTION_ARGS)
 				if (!sequenceIsOwned(sequenceId, DEPENDENCY_AUTO, &sourceRelationId, &columnNumber))
 				{
 					ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-									errmsg("enly sequences that are owned by a table are supported")));
+									errmsg("only sequences that are owned by a table are supported")));
 				}
 
 				break;

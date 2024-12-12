@@ -319,17 +319,15 @@ FindSequenceForRelation(Oid relationId)
 		ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT),
 						errmsg("relation \"%s\" does not have any sequences associated "
 							   "with it",
-							   get_rel_name(relationId)),
-						errhint("Specify the name of the sequence to use for the "
-								"pipeline as the argument")));
+							   get_rel_name(relationId))));
 
 	if (list_length(sequences) > 1)
 		ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT),
 						errmsg("relation \"%s\" has multiple sequences associated "
 							   "with it",
 							   get_rel_name(relationId)),
-						errhint("Specify the name of the sequence to use for the "
-								"pipeline as the argument")));
+						errhint("Specify the name of the sequence to use instead of "
+								"the table name")));
 
 	return linitial_oid(sequences);
 }

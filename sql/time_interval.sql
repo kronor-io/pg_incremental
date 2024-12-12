@@ -1,6 +1,7 @@
 create extension pg_incremental cascade;
 create schema time_range;
 set search_path to time_range;
+set client_min_messages to warning;
 
 -- create a source table
 create table events (

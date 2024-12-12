@@ -52,7 +52,7 @@ GRANT SELECT ON incremental.processed_files TO public;
 
 CREATE FUNCTION incremental.create_sequence_pipeline(
     pipeline_name text,
-    sequence_name regclass,
+    source_table_name regclass,
     command text,
     schedule text default '* * * * *',
     execute_immediately bool default true)
