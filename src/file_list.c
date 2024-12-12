@@ -432,7 +432,11 @@ RemoveProcessedFileList(char *pipelineName)
 char *
 SanitizeListFunction(char *listFunction)
 {
+#if (PG_VERSION_NUM >= 160000)
 	List	   *names = stringToQualifiedNameList(listFunction, NULL);
+#else
+	List	   *names = stringToQualifiedNameList(listFunction);
+#endif
 	Oid			argTypes[] = {TEXTOID};
 	bool		missingOk = false;
 	Oid			functionId = LookupFuncName(names, 1, argTypes, missingOk);
