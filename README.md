@@ -24,6 +24,24 @@ The internal progress tracking is done in the same transaction as the command, w
 
 While there are much more sophisticated approaches to this problem like incremental materialized views or logical decoding-based solutions, they come with many limitations and a lack of flexibility. We felt the need for a simple, fire-and-forget tool that gets the job done without a lot of boilerplate.
 
+## Build and install
+
+pg\_incremental depends on [pg\_cron](https://github.com/citusdata/pg_cron), which needs to be installed first.
+
+To build and install pg\_incremental from source:
+
+```bash
+git clone https://github.com/crunchydata/pg_incremental.git
+cd pg_incremental
+# Ensure pg_config is in your path, e.g.
+export PATH=/usr/pgsql-17/bin:$PATH
+make && sudo PATH=$PATH make install
+```
+
+In PostgreSQL run `create extension pg_incremental cascade;` to get started. 
+
+You can currently on create pg\_incremental in the database that has pg\_cron.
+
 ## Creating incremental processing pipelines
 
 There are 3 types of pipelines in pg\_incremental
