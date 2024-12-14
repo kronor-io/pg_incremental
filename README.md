@@ -40,7 +40,7 @@ make && sudo PATH=$PATH make install
 
 In PostgreSQL run `create extension pg_incremental cascade;` to get started. 
 
-You can currently on create pg\_incremental in the database that has pg\_cron.
+You can only create pg\_incremental in the database that has pg\_cron.
 
 ## Creating incremental processing pipelines
 
