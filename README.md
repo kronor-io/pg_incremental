@@ -38,7 +38,10 @@ export PATH=/usr/pgsql-17/bin:$PATH
 make && sudo PATH=$PATH make install
 ```
 
-In PostgreSQL run `create extension pg_incremental cascade;` to get started. 
+Once the extension is installed, you can create the extension In PostgreSQL:
+```sql
+create extension pg_incremental cascade;
+```
 
 You can only create pg\_incremental in the database that has pg\_cron.
 
