@@ -229,7 +229,71 @@ Arguments of the `incremental.create_file_list_pipeline` function:
 | `execute_immediately` | bool        | Execute command immediately for existing data       | `true`                      |
 
 
-## Executing a pipeline
+## Monitoring pipelines
+
+There are two ways to monitor pipelines: 
+
+1) via tables corresponding to each pipeline type: `incremental.sequence_pipelines`, `incremental.time_interval_pipelines`, and `incremental.processed_files`
+2) via `cron.job_run_details` to check for errors
+
+See the last processed sequence number in a sequence pipeline:
+
+```sql
+select * from incremental.sequence_pipelines ;
+┌─────────────────────┬────────────────────────────┬────────────────────────────────┐
+│    pipeline_name    │       sequence_name        │ last_processed_sequence_number │
+├─────────────────────┼────────────────────────────┼────────────────────────────────┤
+│ view-count-pipeline │ public.events_event_id_seq │                        3000000 │
+│ event-aggregation   │ events_event_id_seq        │                        1000000 │
+└─────────────────────┴────────────────────────────┴────────────────────────────────┘
+```
+
+See the last processed time interval in a time interval pipeline:
+
+```sql
+select * from incremental.time_interval_pipelines;
+┌───────────────┬───────────────┬─────────┬───────────┬────────────────────────┐
+│ pipeline_name │ time_interval │ batched │ min_delay │  last_processed_time   │
+├───────────────┼───────────────┼─────────┼───────────┼────────────────────────┤
+│ export-events │ 1 day         │ f       │ 00:00:30  │ 2024-12-17 00:00:00+01 │
+└───────────────┴───────────────┴─────────┴───────────┴────────────────────────┘
+```
+
+See the processed files in a file list pipeline:
+```sql
+select * from incremental.file_list_pipelines ;
+┌───────────────┬─────────────────────────────────────┬─────────┬─────────────────────────┐
+│ pipeline_name │            file_pattern             │ batched │      list_function      │
+├───────────────┼─────────────────────────────────────┼─────────┼─────────────────────────┤
+│ event-import  │ s3://marco-crunchy-data/inbox/*.csv │ f       │ crunchy_lake.list_files │
+└───────────────┴─────────────────────────────────────┴─────────┴─────────────────────────┘
+
+select * from incremental.processed_files ;
+┌───────────────┬────────────────────────────────────────────┐
+│ pipeline_name │                    path                    │
+├───────────────┼────────────────────────────────────────────┤
+│ event-import  │ s3://marco-crunchy-data/inbox/20241215.csv │
+│ event-import  │ s3://marco-crunchy-data/inbox/20241215.csv │
+└───────────────┴────────────────────────────────────────────┘
+```
+
+For all pipelines, you can check the outcome of the underlying [pg_cron](https://github.com/citusdata/pg_cron) job and any error messages.
+```sql
+select jobname, start_time, status, return_message
+from cron.job_run_details join cron.job using (jobid)
+where jobname like 'pipeline:event-import%' order by 1 desc limit 3;
+┌───────────────────────┬───────────────────────────────┬───────────┬────────────────┐
+│        jobname        │          start_time           │  status   │ return_message │
+├───────────────────────┼───────────────────────────────┼───────────┼────────────────┤
+│ pipeline:event-import │ 2024-12-17 13:27:00.090057+01 │ succeeded │ CALL           │
+│ pipeline:event-import │ 2024-12-17 13:26:00.055813+01 │ succeeded │ CALL           │
+│ pipeline:event-import │ 2024-12-17 13:25:00.086688+01 │ succeeded │ CALL           │
+└───────────────────────┴───────────────────────────────┴───────────┴────────────────┘
+```
+
+Note that the jobs run more frequently than the pipeline command is executed. The job will simply be a noop if there is no new work to do.
+
+## Manually executing a pipeline
 
 You can also execute a pipeline manually using the `incremental.execute_pipeline` procedure, though it will only run the command if there is new data to process.
 
