@@ -41,6 +41,9 @@ make && sudo PATH=$PATH make install
 Once the extension is installed, you can create the extension In PostgreSQL:
 ```sql
 create extension pg_incremental cascade;
+
+/* user needs pg_cron permission to create pipelines */
+grant usage on schema cron to application;
 ```
 
 You can only create pg\_incremental in the database that has pg\_cron.
