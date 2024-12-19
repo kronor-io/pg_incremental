@@ -67,7 +67,7 @@ void
 UnscheduleCronJob(char *jobName)
 {
 	char	   *query =
-		"SELECT cron.unschedule($1) from cron.job where jobname = $1";
+		"SELECT cron.unschedule(jobid) from cron.job where jobname = $1";
 
 	bool		readOnly = false;
 	int			tupleCount = 0;

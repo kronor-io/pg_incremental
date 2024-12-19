@@ -3,6 +3,7 @@
 #include "miscadmin.h"
 
 #include "catalog/dependency.h"
+#include "catalog/namespace.h"
 #include "catalog/pg_authid.h"
 #include "crunchy/incremental/cron.h"
 #include "crunchy/incremental/file_list.h"
@@ -19,9 +20,10 @@
 #include "utils/ruleutils.h"
 
 static void InsertPipeline(char *pipelineName, PipelineType pipelineType, Oid sourceRelationId,
-						   char *command);
+						   char *command, char *searchPath);
 static void EnsurePipelineOwner(char *pipelineName, Oid ownerId);
-static void ExecutePipeline(char *pipelineName, PipelineType pipelineType, char *command);
+static void ExecutePipeline(char *pipelineName, PipelineType pipelineType,
+							char *command, char *searchPath);
 static void ResetPipeline(char *pipelineName, PipelineType pipelineType);
 static void DeletePipeline(char *pipelineName);
 static char *GetCronJobNameForPipeline(char *pipelineName);
@@ -59,6 +61,8 @@ incremental_create_sequence_pipeline(PG_FUNCTION_ARGS)
 	char	   *command = text_to_cstring(PG_GETARG_TEXT_P(2));
 	char	   *schedule = PG_ARGISNULL(3) ? NULL : text_to_cstring(PG_GETARG_TEXT_P(3));
 	bool		executeImmediately = PG_ARGISNULL(4) ? false : PG_GETARG_BOOL(4);
+
+	char	   *searchPath = pstrdup(namespace_search_path);
 
 	Oid			sourceRelationId = InvalidOid;
 
@@ -101,15 +105,14 @@ incremental_create_sequence_pipeline(PG_FUNCTION_ARGS)
 
 	List	   *paramTypes = list_make2_oid(INT8OID, INT8OID);
 
-	/* sanitize the query */
-	Query	   *parsedQuery = ParseQuery(command, paramTypes);
-	char	   *sanitizedCommand = DeparseQuery(parsedQuery);
+	/* validate the query */
+	ParseQuery(command, paramTypes);
 
-	InsertPipeline(pipelineName, SEQUENCE_RANGE_PIPELINE, sourceRelationId, sanitizedCommand);
+	InsertPipeline(pipelineName, SEQUENCE_RANGE_PIPELINE, sourceRelationId, command, searchPath);
 	InitializeSequencePipelineState(pipelineName, sequenceId);
 
 	if (executeImmediately)
-		ExecutePipeline(pipelineName, SEQUENCE_RANGE_PIPELINE, sanitizedCommand);
+		ExecutePipeline(pipelineName, SEQUENCE_RANGE_PIPELINE, command, searchPath);
 
 	if (schedule != NULL)
 	{
@@ -157,6 +160,8 @@ incremental_create_time_interval_pipeline(PG_FUNCTION_ARGS)
 	Interval   *minDelay = PG_GETARG_INTERVAL_P(7);
 	bool		executeImmediately = PG_ARGISNULL(8) ? false : PG_GETARG_BOOL(8);
 
+	char	   *searchPath = pstrdup(namespace_search_path);
+
 	if (!batched && PG_ARGISNULL(4))
 	{
 		ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -167,15 +172,14 @@ incremental_create_time_interval_pipeline(PG_FUNCTION_ARGS)
 
 	List	   *paramTypes = list_make2_oid(TIMESTAMPTZOID, TIMESTAMPTZOID);
 
-	/* validate and sanitize the query */
-	Query	   *parsedQuery = ParseQuery(command, paramTypes);
-	char	   *sanitizedCommand = DeparseQuery(parsedQuery);
+	/* validate the query */
+	ParseQuery(command, paramTypes);
 
-	InsertPipeline(pipelineName, TIME_INTERVAL_PIPELINE, relationId, sanitizedCommand);
+	InsertPipeline(pipelineName, TIME_INTERVAL_PIPELINE, relationId, command, searchPath);
 	InitializeTimeRangePipelineState(pipelineName, batched, startTime, timeInterval, minDelay);
 
 	if (executeImmediately)
-		ExecutePipeline(pipelineName, TIME_INTERVAL_PIPELINE, sanitizedCommand);
+		ExecutePipeline(pipelineName, TIME_INTERVAL_PIPELINE, command, searchPath);
 
 	if (schedule != NULL)
 	{
@@ -216,6 +220,7 @@ incremental_create_file_list_pipeline(PG_FUNCTION_ARGS)
 	char	   *listFunction = text_to_cstring(PG_GETARG_TEXT_P(4));
 	char	   *schedule = PG_ARGISNULL(5) ? NULL : text_to_cstring(PG_GETARG_TEXT_P(5));
 	bool		executeImmediately = PG_ARGISNULL(6) ? false : PG_GETARG_BOOL(6);
+	char	   *searchPath = pstrdup(namespace_search_path);
 
 	if (batched)
 	{
@@ -228,15 +233,14 @@ incremental_create_file_list_pipeline(PG_FUNCTION_ARGS)
 
 	List	   *paramTypes = list_make1_oid(TEXTOID);
 
-	/* validate and sanitize the query */
-	Query	   *parsedQuery = ParseQuery(command, paramTypes);
-	char	   *sanitizedCommand = DeparseQuery(parsedQuery);
+	/* validate the query */
+	ParseQuery(command, paramTypes);
 
-	InsertPipeline(pipelineName, FILE_LIST_PIPELINE, InvalidOid, sanitizedCommand);
+	InsertPipeline(pipelineName, FILE_LIST_PIPELINE, InvalidOid, command, searchPath);
 	InitializeFileListPipelineState(pipelineName, prefix, batched, listFunction);
 
 	if (executeImmediately)
-		ExecutePipeline(pipelineName, FILE_LIST_PIPELINE, sanitizedCommand);
+		ExecutePipeline(pipelineName, FILE_LIST_PIPELINE, command, searchPath);
 
 	if (schedule != NULL)
 	{
@@ -264,7 +268,8 @@ incremental_execute_pipeline(PG_FUNCTION_ARGS)
 	PipelineDesc *pipelineDesc = ReadPipelineDesc(pipelineName);
 
 	EnsurePipelineOwner(pipelineName, pipelineDesc->ownerId);
-	ExecutePipeline(pipelineName, pipelineDesc->pipelineType, pipelineDesc->command);
+	ExecutePipeline(pipelineName, pipelineDesc->pipelineType, pipelineDesc->command,
+					pipelineDesc->searchPath);
 
 	PG_RETURN_VOID();
 }
@@ -284,7 +289,8 @@ incremental_reset_pipeline(PG_FUNCTION_ARGS)
 	ResetPipeline(pipelineName, pipelineDesc->pipelineType);
 
 	if (executeImmediately)
-		ExecutePipeline(pipelineName, pipelineDesc->pipelineType, pipelineDesc->command);
+		ExecutePipeline(pipelineName, pipelineDesc->pipelineType, pipelineDesc->command,
+						pipelineDesc->searchPath);
 
 	PG_RETURN_VOID();
 }
@@ -313,7 +319,7 @@ incremental_drop_pipeline(PG_FUNCTION_ARGS)
  */
 static void
 InsertPipeline(char *pipelineName, PipelineType pipelineType, Oid sourceRelationId,
-			   char *command)
+			   char *command, char *searchPath)
 {
 	Oid			savedUserId = InvalidOid;
 	int			savedSecurityContext = 0;
@@ -327,21 +333,22 @@ InsertPipeline(char *pipelineName, PipelineType pipelineType, Oid sourceRelation
 
 	char	   *query =
 		"insert into incremental.pipelines "
-		"(pipeline_name, pipeline_type, owner_id, source_relation, command) "
-		"values ($1, $2, $3, $4, $5)";
+		"(pipeline_name, pipeline_type, owner_id, source_relation, command, search_path) "
+		"values ($1, $2, $3, $4, $5, $6)";
 
 	bool		readOnly = false;
 	int			tupleCount = 0;
-	int			argCount = 5;
-	Oid			argTypes[] = {TEXTOID, CHAROID, OIDOID, OIDOID, TEXTOID};
+	int			argCount = 6;
+	Oid			argTypes[] = {TEXTOID, CHAROID, OIDOID, OIDOID, TEXTOID, TEXTOID};
 	Datum		argValues[] = {
 		CStringGetTextDatum(pipelineName),
 		CharGetDatum(pipelineType),
 		ObjectIdGetDatum(savedUserId),
 		ObjectIdGetDatum(sourceRelationId),
-		CStringGetTextDatum(command)
+		CStringGetTextDatum(command),
+		CStringGetTextDatum(searchPath)
 	};
-	char	   *argNulls = "     ";
+	char	   *argNulls = "      ";
 
 	SPI_connect();
 	SPI_execute_with_args(query,
@@ -378,7 +385,7 @@ ReadPipelineDesc(char *pipelineName)
 	MemoryContext callerContext = CurrentMemoryContext;
 
 	char	   *query =
-		"select pipeline_type, owner_id, source_relation, command "
+		"select pipeline_type, owner_id, source_relation, command, search_path "
 		"from incremental.pipelines "
 		"where pipeline_name operator(pg_catalog.=) $1";
 
@@ -423,6 +430,11 @@ ReadPipelineDesc(char *pipelineName)
 	pipelineDesc->sourceRelationId = DatumGetObjectId(sourceRelationDatum);
 	pipelineDesc->command = TextDatumGetCString(commandDatum);
 
+	Datum		searchPathDatum = SPI_getbinval(row, rowDesc, 5, &isNull);
+
+	if (!isNull)
+		pipelineDesc->searchPath = TextDatumGetCString(searchPathDatum);
+
 	MemoryContextSwitchTo(spiContext);
 
 	SPI_finish();
@@ -454,8 +466,18 @@ EnsurePipelineOwner(char *pipelineName, Oid ownerId)
  * ExecutePipeline executes a pipeline.
  */
 static void
-ExecutePipeline(char *pipelineName, PipelineType pipelineType, char *command)
+ExecutePipeline(char *pipelineName, PipelineType pipelineType,
+				char *command, char *searchPath)
 {
+	int			gucNestLevel = NewGUCNestLevel();
+
+	if (searchPath != NULL)
+	{
+		(void) set_config_option("search_path", searchPath,
+								 PGC_USERSET, PGC_S_SESSION,
+								 GUC_ACTION_SAVE, true, 0, false);
+	}
+
 	switch (pipelineType)
 	{
 		case SEQUENCE_RANGE_PIPELINE:
@@ -473,6 +495,8 @@ ExecutePipeline(char *pipelineName, PipelineType pipelineType, char *command)
 		default:
 			elog(ERROR, "unknown pipeline type: %c", pipelineType);
 	}
+
+	AtEOXact_GUC(true, gucNestLevel);
 }
 
 
