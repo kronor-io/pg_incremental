@@ -25,6 +25,9 @@ typedef struct PipelineDesc
 
 	/* command to run for the pipeline */
 	char	   *command;
+
+	/* search_path to use during execution */
+	char	   *searchPath;
 }			PipelineDesc;
 
 PipelineDesc *ReadPipelineDesc(char *pipelineName);
