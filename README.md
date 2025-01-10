@@ -231,6 +231,11 @@ Arguments of the `incremental.create_file_list_pipeline` function:
 | `schedule`            | text        | pg\_cron schedule for periodic execution (or NULL)  | `* * * * *` (every minute)  |
 | `execute_immediately` | bool        | Execute command immediately for existing data       | `true`                      |
 
+Instead of using the argument, you can also change the default list function via the `incremental.default_file_list_function` setting:
+
+```
+set incremental.default_file_list_function to 'public.list_local_files';
+```
 
 ## Monitoring pipelines
 

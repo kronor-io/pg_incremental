@@ -210,14 +210,12 @@ incremental_create_file_list_pipeline(PG_FUNCTION_ARGS)
 		ereport(ERROR, (errmsg("prefix cannot be NULL")));
 	if (PG_ARGISNULL(2))
 		ereport(ERROR, (errmsg("command cannot be NULL")));
-	if (PG_ARGISNULL(4))
-		ereport(ERROR, (errmsg("list_function cannot be NULL")));
 
 	char	   *pipelineName = text_to_cstring(PG_GETARG_TEXT_P(0));
 	char	   *prefix = text_to_cstring(PG_GETARG_TEXT_P(1));
 	char	   *command = text_to_cstring(PG_GETARG_TEXT_P(2));
 	bool		batched = PG_ARGISNULL(3) ? false : PG_GETARG_BOOL(3);
-	char	   *listFunction = text_to_cstring(PG_GETARG_TEXT_P(4));
+	char	   *listFunction = PG_ARGISNULL(4) ? DefaultFileListFunction : text_to_cstring(PG_GETARG_TEXT_P(4));
 	char	   *schedule = PG_ARGISNULL(5) ? NULL : text_to_cstring(PG_GETARG_TEXT_P(5));
 	bool		executeImmediately = PG_ARGISNULL(6) ? false : PG_GETARG_BOOL(6);
 	char	   *searchPath = pstrdup(namespace_search_path);

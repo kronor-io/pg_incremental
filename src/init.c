@@ -2,6 +2,9 @@
 #include "fmgr.h"
 #include "miscadmin.h"
 
+#include "crunchy/incremental/file_list.h"
+#include "utils/guc.h"
+
 
 PG_MODULE_MAGIC;
 
@@ -17,4 +20,15 @@ _PG_init(void)
 {
 	if (IsBinaryUpgrade)
 		return;
+
+	DefineCustomStringVariable("incremental.default_file_list_function",
+							   gettext_noop("Default file list function to use in file "
+											"list pipelines if no list_function is "
+											"specified."),
+							   NULL,
+							   &DefaultFileListFunction,
+							   DEFAULT_FILE_LIST_FUNCTION,
+							   PGC_USERSET,
+							   0,
+							   NULL, NULL, NULL);
 }

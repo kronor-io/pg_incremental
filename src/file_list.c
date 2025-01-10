@@ -43,6 +43,10 @@ static List *GetUnprocessedFileList(char *pipelineName, char *listFunction,
 static void InsertProcessedFile(char *pipelineName, char *path);
 
 
+/* crunchy_lake.default_file_list_function setting */
+char	   *DefaultFileListFunction = DEFAULT_FILE_LIST_FUNCTION;
+
+
 
 /*
  * InitializeFileListPipelineState adds the initial file list pipeline state.
