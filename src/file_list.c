@@ -333,7 +333,7 @@ GetUnprocessedFileList(char *pipelineName, char *listFunction, char *filePattern
 
 	appendStringInfo(query,
 					 "select path "
-					 "from %s($2) "
+					 "from %s($2) as res(path) "
 					 "where path not in ("
 					 "select path from incremental.processed_files where pipeline_name operator(pg_catalog.=) $1"
 					 ")",
