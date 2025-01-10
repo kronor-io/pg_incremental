@@ -1,3 +1,7 @@
+### pg\_incremental v1.1.1 (January 10, 2024)
+
+* Fixes a bug that prevented file list pipelines from being refreshed
+
 ### pg\_incremental v1.1.0 (January 10, 2024)
 
 * Fixes a bug that prevented insert..select pipelines (#2)
