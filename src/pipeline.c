@@ -222,16 +222,15 @@ incremental_create_file_list_pipeline(PG_FUNCTION_ARGS)
 	bool		executeImmediately = PG_ARGISNULL(6) ? false : PG_GETARG_BOOL(6);
 	char	   *searchPath = pstrdup(namespace_search_path);
 
-	if (batched)
-	{
-		ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-						errmsg("batched file pipelines are not yet supported")));
-	}
-
 	/* validate and sanitize function name */
 	listFunction = SanitizeListFunction(listFunction);
 
-	List	   *paramTypes = list_make1_oid(TEXTOID);
+	List	   *paramTypes = NIL;
+
+	if (batched)
+		paramTypes = list_make1_oid(TEXTARRAYOID);
+	else
+		paramTypes = list_make1_oid(TEXTOID);
 
 	/* validate the query */
 	ParseQuery(command, paramTypes);

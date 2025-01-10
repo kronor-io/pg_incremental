@@ -13,6 +13,7 @@
 #include "storage/lmgr.h"
 #include "storage/lock.h"
 #include "utils/acl.h"
+#include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/fmgrprotos.h"
 #include "utils/lsyscache.h"
@@ -34,6 +35,8 @@ typedef struct FileList
 
 
 static void ExecuteFileListPipelineForFile(char *pipelineName, char *command, char *path);
+static void ExecuteFileListPipelineForFileArray(char *pipelineName, char *command,
+												ArrayType *filePaths);
 static FileList * GetUnprocessedFilesForPipeline(char *pipelineName);
 static List *GetUnprocessedFileList(char *pipelineName, char *listFunction,
 									char *filePattern);
@@ -107,9 +110,39 @@ ExecuteFileListPipeline(char *pipelineName, char *command)
 
 	if (fileList->batched)
 	{
-		/* pass the files as an array */
-		ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-						errmsg("batched file pipelines are not yet supported")));
+		int			fileCount = list_length(fileList->files);
+		Datum	   *fileDatums = palloc0(sizeof(Datum) * fileCount);
+		int			datumIndex = 0;
+
+		ListCell   *fileCell = NULL;
+
+		foreach(fileCell, fileList->files)
+		{
+			char	   *path = lfirst(fileCell);
+
+			fileDatums[datumIndex] = CStringGetTextDatum(path);
+			datumIndex += 1;
+		}
+
+		ArrayType  *filesArray = construct_array(fileDatums,
+												 fileCount,
+												 TEXTOID,
+												 -1,
+												 false,
+												 TYPALIGN_INT);
+
+		ereport(NOTICE, (errmsg("pipeline %s: processing file list pipeline for %d files",
+								pipelineName,
+								fileCount)));
+
+		ExecuteFileListPipelineForFileArray(pipelineName, command, filesArray);
+
+		foreach(fileCell, fileList->files)
+		{
+			char	   *path = lfirst(fileCell);
+
+			InsertProcessedFile(pipelineName, path);
+		}
 	}
 	else
 	{
@@ -119,6 +152,9 @@ ExecuteFileListPipeline(char *pipelineName, char *command)
 		{
 			char	   *path = lfirst(fileCell);
 
+			ereport(NOTICE, (errmsg("pipeline %s: processing file list pipeline for %s",
+									pipelineName, path)));
+
 			ExecuteFileListPipelineForFile(pipelineName, command, path);
 			InsertProcessedFile(pipelineName, path);
 		}
@@ -127,15 +163,12 @@ ExecuteFileListPipeline(char *pipelineName, char *command)
 
 
 /*
- * ExecuteFileListPipelineForList executes a file list pipeline for
- * the given file list.
+ * ExecuteFileListPipelineForFile executes a file list pipeline for
+ * the given file.
  */
 static void
 ExecuteFileListPipelineForFile(char *pipelineName, char *command, char *path)
 {
-	ereport(NOTICE, (errmsg("pipeline %s: processing file list pipeline for %s",
-							pipelineName, path)));
-
 	PushActiveSnapshot(GetTransactionSnapshot());
 
 	bool		readOnly = false;
@@ -144,6 +177,38 @@ ExecuteFileListPipelineForFile(char *pipelineName, char *command, char *path)
 	Oid			argTypes[] = {TEXTOID};
 	Datum		argValues[] = {
 		CStringGetTextDatum(path)
+	};
+	char	   *argNulls = " ";
+
+	SPI_connect();
+	SPI_execute_with_args(command,
+						  argCount,
+						  argTypes,
+						  argValues,
+						  argNulls,
+						  readOnly,
+						  tupleCount);
+	SPI_finish();
+
+	PopActiveSnapshot();
+}
+
+
+/*
+ * ExecuteFileListPipelineFor executes a file list pipeline for the given
+ * files array.
+ */
+static void
+ExecuteFileListPipelineForFileArray(char *pipelineName, char *command, ArrayType *filePaths)
+{
+	PushActiveSnapshot(GetTransactionSnapshot());
+
+	bool		readOnly = false;
+	int			tupleCount = 0;
+	int			argCount = 1;
+	Oid			argTypes[] = {TEXTARRAYOID};
+	Datum		argValues[] = {
+		PointerGetDatum(filePaths)
 	};
 	char	   *argNulls = " ";
 
