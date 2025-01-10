@@ -366,7 +366,7 @@ GetUnprocessedFileList(char *pipelineName, char *listFunction, char *filePattern
 
 	for (int rowIndex = 0; rowIndex < SPI_processed; rowIndex++)
 	{
-		HeapTuple	row = SPI_tuptable->vals[0];
+		HeapTuple	row = SPI_tuptable->vals[rowIndex];
 
 		bool		isNull = false;
 		Datum		pathDatum = SPI_getbinval(row, rowDesc, 1, &isNull);
