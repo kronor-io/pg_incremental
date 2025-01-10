@@ -462,7 +462,7 @@ RemoveProcessedFileList(char *pipelineName)
 	 * has not committed yet. Also block other pipeline rollups.
 	 */
 	char	   *query =
-		"delete from incremental.file_list_pipelines "
+		"delete from incremental.processed_files "
 		"where pipeline_name operator(pg_catalog.=) $1";
 
 	bool		readOnly = false;
