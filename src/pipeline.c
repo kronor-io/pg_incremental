@@ -204,20 +204,26 @@ incremental_create_time_interval_pipeline(PG_FUNCTION_ARGS)
 Datum
 incremental_create_file_list_pipeline(PG_FUNCTION_ARGS)
 {
+	if (PG_NARGS() != 8)
+		ereport(ERROR, (errmsg("extension needs to be updated"),
+						errhint("Run ALTER EXTENSION pg_incremental UPDATE")));
 	if (PG_ARGISNULL(0))
 		ereport(ERROR, (errmsg("pipeline_name cannot be NULL")));
 	if (PG_ARGISNULL(1))
 		ereport(ERROR, (errmsg("prefix cannot be NULL")));
 	if (PG_ARGISNULL(2))
 		ereport(ERROR, (errmsg("command cannot be NULL")));
+	if (!PG_ARGISNULL(5) && PG_GETARG_INT32(5) <= 0)
+		ereport(ERROR, (errmsg("max_batch_size must be positive or NULL")));
 
 	char	   *pipelineName = text_to_cstring(PG_GETARG_TEXT_P(0));
 	char	   *prefix = text_to_cstring(PG_GETARG_TEXT_P(1));
 	char	   *command = text_to_cstring(PG_GETARG_TEXT_P(2));
 	bool		batched = PG_ARGISNULL(3) ? false : PG_GETARG_BOOL(3);
 	char	   *listFunction = PG_ARGISNULL(4) ? DefaultFileListFunction : text_to_cstring(PG_GETARG_TEXT_P(4));
-	char	   *schedule = PG_ARGISNULL(5) ? NULL : text_to_cstring(PG_GETARG_TEXT_P(5));
-	bool		executeImmediately = PG_ARGISNULL(6) ? false : PG_GETARG_BOOL(6);
+	int			maxBatchSize = PG_ARGISNULL(5) ? 0 : PG_GETARG_INT32(5);
+	char	   *schedule = PG_ARGISNULL(6) ? NULL : text_to_cstring(PG_GETARG_TEXT_P(6));
+	bool		executeImmediately = PG_ARGISNULL(7) ? false : PG_GETARG_BOOL(7);
 	char	   *searchPath = pstrdup(namespace_search_path);
 
 	/* validate and sanitize function name */
@@ -234,7 +240,7 @@ incremental_create_file_list_pipeline(PG_FUNCTION_ARGS)
 	ParseQuery(command, paramTypes);
 
 	InsertPipeline(pipelineName, FILE_LIST_PIPELINE, InvalidOid, command, searchPath);
-	InitializeFileListPipelineState(pipelineName, prefix, batched, listFunction);
+	InitializeFileListPipelineState(pipelineName, prefix, batched, listFunction, maxBatchSize);
 
 	if (executeImmediately)
 		ExecutePipeline(pipelineName, FILE_LIST_PIPELINE, command, searchPath);

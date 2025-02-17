@@ -31,10 +31,13 @@ typedef struct FileList
 {
 	List	   *files;
 	bool		batched;
+	int			maxBatchSize;
 }			FileList;
 
 
 static void ExecuteFileListPipelineForFile(char *pipelineName, char *command, char *path);
+static void ExecuteBatchedFileListPipeline(char *pipelineName, char *command, FileList *fileList,
+										   int offset);
 static void ExecuteFileListPipelineForFileArray(char *pipelineName, char *command,
 												ArrayType *filePaths);
 static FileList * GetUnprocessedFilesForPipeline(char *pipelineName);
@@ -53,7 +56,7 @@ char	   *DefaultFileListFunction = DEFAULT_FILE_LIST_FUNCTION;
  */
 void
 InitializeFileListPipelineState(char *pipelineName, char *pattern, bool batched,
-								char *listFunction)
+								char *listFunction, int maxBatchSize)
 {
 	Oid			savedUserId = InvalidOid;
 	int			savedSecurityContext = 0;
@@ -67,20 +70,23 @@ InitializeFileListPipelineState(char *pipelineName, char *pattern, bool batched,
 
 	char	   *query =
 		"insert into incremental.file_list_pipelines "
-		"(pipeline_name, file_pattern, batched, list_function) "
-		"values ($1, $2, $3, $4)";
+		"(pipeline_name, file_pattern, batched, list_function, max_batch_size) "
+		"values ($1, $2, $3, $4, $5)";
 
 	bool		readOnly = false;
 	int			tupleCount = 0;
-	int			argCount = 4;
-	Oid			argTypes[] = {TEXTOID, TEXTOID, BOOLOID, TEXTOID};
+	int			argCount = 5;
+	Oid			argTypes[] = {TEXTOID, TEXTOID, BOOLOID, TEXTOID, INT4OID};
 	Datum		argValues[] = {
 		CStringGetTextDatum(pipelineName),
 		CStringGetTextDatum(pattern),
 		BoolGetDatum(batched),
-		CStringGetTextDatum(listFunction)
+		CStringGetTextDatum(listFunction),
+		Int32GetDatum(maxBatchSize)
 	};
-	char		argNulls[] = "    ";
+	char		argNulls[] = {
+		' ', ' ', ' ', ' ', maxBatchSize > 0 ? ' ' : 'n'
+	};
 
 	SPI_connect();
 	SPI_execute_with_args(query,
@@ -114,39 +120,15 @@ ExecuteFileListPipeline(char *pipelineName, char *command)
 
 	if (fileList->batched)
 	{
-		int			fileCount = list_length(fileList->files);
-		Datum	   *fileDatums = palloc0(sizeof(Datum) * fileCount);
-		int			datumIndex = 0;
+		int offset = 0;
 
-		ListCell   *fileCell = NULL;
-
-		foreach(fileCell, fileList->files)
+		do
 		{
-			char	   *path = lfirst(fileCell);
+			ExecuteBatchedFileListPipeline(pipelineName, command, fileList, offset);
 
-			fileDatums[datumIndex] = CStringGetTextDatum(path);
-			datumIndex += 1;
+			offset += fileList->maxBatchSize;
 		}
-
-		ArrayType  *filesArray = construct_array(fileDatums,
-												 fileCount,
-												 TEXTOID,
-												 -1,
-												 false,
-												 TYPALIGN_INT);
-
-		ereport(NOTICE, (errmsg("pipeline %s: processing file list pipeline for %d files",
-								pipelineName,
-								fileCount)));
-
-		ExecuteFileListPipelineForFileArray(pipelineName, command, filesArray);
-
-		foreach(fileCell, fileList->files)
-		{
-			char	   *path = lfirst(fileCell);
-
-			InsertProcessedFile(pipelineName, path);
-		}
+		while (fileList->maxBatchSize > 0 && offset < list_length(fileList->files));
 	}
 	else
 	{
@@ -196,6 +178,64 @@ ExecuteFileListPipelineForFile(char *pipelineName, char *command, char *path)
 
 	PopActiveSnapshot();
 }
+
+
+/*
+ * ExecuteBatchedFileListPipeline executes a pipeline using text array to
+ * pass in the filename.
+ */
+static void
+ExecuteBatchedFileListPipeline(char *pipelineName, char *command, FileList *fileList,
+							   int offset)
+{
+	int			fileCount = list_length(fileList->files);
+
+	if (fileList->maxBatchSize > 0 && fileCount > fileList->maxBatchSize)
+		fileCount = fileList->maxBatchSize;
+
+	Datum	   *fileDatums = palloc0(sizeof(Datum) * fileCount);
+	int			datumIndex = 0;
+	ListCell   *fileCell = NULL;
+
+	for_each_from(fileCell, fileList->files, offset)
+	{
+		char	   *path = lfirst(fileCell);
+
+		fileDatums[datumIndex] = CStringGetTextDatum(path);
+		datumIndex += 1;
+
+		if (fileList->maxBatchSize > 0 && datumIndex == fileList->maxBatchSize)
+			break;
+	}
+
+	ArrayType  *filesArray = construct_array(fileDatums,
+											 fileCount,
+											 TEXTOID,
+											 -1,
+											 false,
+											 TYPALIGN_INT);
+
+	ereport(NOTICE, (errmsg("pipeline %s: processing file list pipeline for %d files",
+							pipelineName,
+							fileCount)));
+
+	ExecuteFileListPipelineForFileArray(pipelineName, command, filesArray);
+
+	int		fileIndex = 0;
+
+	for_each_from(fileCell, fileList->files, offset)
+	{
+		char	   *path = lfirst(fileCell);
+
+		InsertProcessedFile(pipelineName, path);
+
+		fileIndex += 1;
+
+		if (fileList->maxBatchSize > 0 && fileIndex == fileList->maxBatchSize)
+			break;
+	}
+}
+
 
 
 /*
@@ -253,7 +293,7 @@ GetUnprocessedFilesForPipeline(char *pipelineName)
 	 * Get the file list pipeline properties.
 	 */
 	char	   *query =
-		"select batched, list_function, file_pattern "
+		"select batched, list_function, file_pattern, max_batch_size "
 		"from incremental.file_list_pipelines "
 		"where pipeline_name operator(pg_catalog.=) $1 "
 		"for update";
@@ -288,6 +328,11 @@ GetUnprocessedFilesForPipeline(char *pipelineName)
 	Datum		batchedDatum = SPI_getbinval(row, rowDesc, 1, &isNull);
 	Datum		listFunctionDatum = SPI_getbinval(row, rowDesc, 2, &isNull);
 	Datum		filePatternDatum = SPI_getbinval(row, rowDesc, 3, &isNull);
+	Datum		maxBatchSizeDatum = SPI_getbinval(row, rowDesc, 4, &isNull);
+
+	int			maxBatchSize = -1;
+	if (!isNull)
+		maxBatchSize = DatumGetInt32(maxBatchSizeDatum);
 
 	MemoryContext oldContext = MemoryContextSwitchTo(outerContext);
 
@@ -304,6 +349,7 @@ GetUnprocessedFilesForPipeline(char *pipelineName)
 	FileList   *fileList = (FileList *) palloc0(sizeof(FileList));
 
 	fileList->batched = batched;
+	fileList->maxBatchSize = maxBatchSize;
 	fileList->files = GetUnprocessedFileList(pipelineName, listFunction, filePattern);
 
 	return fileList;
