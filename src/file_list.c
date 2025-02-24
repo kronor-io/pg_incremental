@@ -382,11 +382,12 @@ GetUnprocessedFileList(char *pipelineName, char *listFunction, char *filePattern
 	StringInfo	query = makeStringInfo();
 
 	appendStringInfo(query,
-					 "select path "
-					 "from %s($2) as res(path) "
-					 "where path not in ("
-					 "select path from incremental.processed_files where pipeline_name operator(pg_catalog.=) $1"
-					 ")",
+					 "select list.path "
+					 "from %s($2) as list(path) "
+					 "left join incremental.processed_files proc "
+					 "on (pipeline_name operator(pg_catalog.=) $1 "
+					 "and list.path operator(pg_catalog.=) proc.path) "
+					 "where proc.path is null",
 					 listFunction);
 
 	bool		readOnly = false;
