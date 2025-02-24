@@ -188,7 +188,7 @@ static void
 ExecuteBatchedFileListPipeline(char *pipelineName, char *command, FileList *fileList,
 							   int offset)
 {
-	int			fileCount = list_length(fileList->files);
+	int			fileCount = list_length(fileList->files) - offset;
 
 	if (fileList->maxBatchSize > 0 && fileCount > fileList->maxBatchSize)
 		fileCount = fileList->maxBatchSize;
