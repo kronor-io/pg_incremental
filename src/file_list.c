@@ -36,7 +36,7 @@ typedef struct FileList
 
 
 static void ExecuteFileListPipelineForFile(char *pipelineName, char *command, char *path);
-static void ExecuteBatchedFileListPipeline(char *pipelineName, char *command, FileList *fileList,
+static void ExecuteBatchedFileListPipeline(char *pipelineName, char *command, FileList * fileList,
 										   int offset);
 static void ExecuteFileListPipelineForFileArray(char *pipelineName, char *command,
 												ArrayType *filePaths);
@@ -120,7 +120,7 @@ ExecuteFileListPipeline(char *pipelineName, char *command)
 
 	if (fileList->batched)
 	{
-		int offset = 0;
+		int			offset = 0;
 
 		do
 		{
@@ -185,7 +185,7 @@ ExecuteFileListPipelineForFile(char *pipelineName, char *command, char *path)
  * pass in the filename.
  */
 static void
-ExecuteBatchedFileListPipeline(char *pipelineName, char *command, FileList *fileList,
+ExecuteBatchedFileListPipeline(char *pipelineName, char *command, FileList * fileList,
 							   int offset)
 {
 	int			fileCount = list_length(fileList->files) - offset;
@@ -221,7 +221,7 @@ ExecuteBatchedFileListPipeline(char *pipelineName, char *command, FileList *file
 
 	ExecuteFileListPipelineForFileArray(pipelineName, command, filesArray);
 
-	int		fileIndex = 0;
+	int			fileIndex = 0;
 
 	for_each_from(fileCell, fileList->files, offset)
 	{
@@ -331,6 +331,7 @@ GetUnprocessedFilesForPipeline(char *pipelineName)
 	Datum		maxBatchSizeDatum = SPI_getbinval(row, rowDesc, 4, &isNull);
 
 	int			maxBatchSize = -1;
+
 	if (!isNull)
 		maxBatchSize = DatumGetInt32(maxBatchSizeDatum);
 
