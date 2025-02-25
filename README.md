@@ -221,15 +221,16 @@ The API of the file list pipeline is still subject to change. It currently defau
 
 Arguments of the `incremental.create_file_list_pipeline` function:
 
-| Argument name         | Type        | Description                                         | Default                     |
-| --------------------- | ----------- | --------------------------------------------------- | --------------------------- |
-| `pipeline_name`       | text        | User-defined name of the pipeline                   | Required                    |
-| `file_pattern`        | text        | File pattern to pass to the list function           | Required                    |
-| `command`             | text        | Pipeline command with $1 and $2 parameters          | Required                    |
-| `batched`             | bool        | Currently unused                                    | `false`                     |
-| `list_function`       | text        | Name of the function used to list files             | `crunchy_lake.list_files`   |
-| `schedule`            | text        | pg\_cron schedule for periodic execution (or NULL)  | `* * * * *` (every minute)  |
-| `execute_immediately` | bool        | Execute command immediately for existing data       | `true`                      |
+| Argument name         | Type        | Description                                         | Default                            |
+| --------------------- | ----------- | --------------------------------------------------- | ---------------------------------- |
+| `pipeline_name`       | text        | User-defined name of the pipeline                   | Required                           |
+| `file_pattern`        | text        | File pattern to pass to the list function           | Required                           |
+| `command`             | text        | Pipeline command with $1 and $2 parameters          | Required                           |
+| `list_function`       | text        | Name of the function used to list files             | `crunchy_lake.list_files`          |
+| `batched`             | bool        | Whether to pass in a batch of files as an array     | `false`                            |
+| `max_batch_size`      | int         | If batched, maximum length of the array             | 100                                |
+| `schedule`            | text        | pg\_cron schedule for periodic execution (or NULL)  | `*/15 * * * *` (every 15 minutes)  |
+| `execute_immediately` | bool        | Execute command immediately for existing data       | `true`                             |
 
 Instead of using the argument, you can also change the default list function via the `incremental.default_file_list_function` setting:
 
