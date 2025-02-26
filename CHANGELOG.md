@@ -1,8 +1,15 @@
-### pg\_incremental v1.1.1 (January 10, 2024)
+### pg\_incremental v1.2.0 (February 26, 2025)
+
+* Fixes bug that could cause batched file list pipelines to crash
+* Add a `max_batch_size` argument to file list pipelines
+* Improve performance of batched file list pipelines
+* Adjust the default schedule of file list pipelines to every 15 minutes
+
+### pg\_incremental v1.1.1 (January 10, 2025)
 
 * Fixes a bug that prevented file list pipelines from being refreshed
 
-### pg\_incremental v1.1.0 (January 10, 2024)
+### pg\_incremental v1.1.0 (January 10, 2025)
 
 * Fixes a bug that prevented insert..select pipelines (#2)
 * Fixes a bug that caused file list pipelines to repeat first file
