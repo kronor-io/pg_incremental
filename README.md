@@ -54,7 +54,7 @@ There are 3 types of pipelines in pg\_incremental
 
 - **Sequence pipelines** - The pipeline query is executed for a range of sequence values, with a mechanism to ensure that no more new sequence values will fall in the range. These pipelines are most suitable for incrementally building summary tables.
 - **Time interval pipelines** - The pipeline query is executed for a time interval or range of time intervals, after the time interval has passed. These pipelines can be used for incrementally building summary tables or periodically exporting new data.
-- **File list pipelines (PREVIEW)** - The pipeline query is executed for a new file obtained from a file list function. These pipelines can be used to import new data.
+- **File list pipelines** - The pipeline query is executed for a new file obtained from a file list function. These pipelines can be used to import new data.
 
 Each pipeline has a command with 1 or 2 parameters. The pipelines run periodically using [pg\_cron](https://github.com/citusdata/pg_cron) (every minute, by default) and execute the command only if there is new data to process. However, each pipeline execution will appear in `cron.job_run_details` regardless of whether there is new data.
 
@@ -196,7 +196,7 @@ Arguments of the `incremental.create_time_range_pipeline` function:
 | `min_delay`           | interval    | How long to wait to process a past interval        | `30 seconds`               |
 | `execute_immediately` | bool        | Execute command immediately for existing data      | `true`                     |
 
-### Creating a file list pipeline (PREVIEW)
+### Creating a file list pipeline
 
 You can define a file list pipeline with the `incremental.create_file_list_pipeline` function by specifying a generic pipeline name, a file pattern, and a command. The command will be executed in a context where `$1` is set to the path of a file (text). The pipeline periodically looks for new files returned by a list function and then executes the command for each new file.
 
@@ -234,8 +234,15 @@ Arguments of the `incremental.create_file_list_pipeline` function:
 
 Instead of using the argument, you can also change the default list function via the `incremental.default_file_list_function` setting:
 
-```
+```sql
+-- change the default file list function (note: this function name is an example and not included in pg_incremental)
 set incremental.default_file_list_function to 'public.list_local_files';
+```
+
+If you have a faulty file, you can skip it by running the `incremental.skip_file` function. It will be treated as already-processed and therefore skipped in future runs.
+```sql
+-- skip a file that contains errors
+select incremental.skip_file('event-import', 's3://mybucket/events/inbox/00048.csv');
 ```
 
 ## Monitoring pipelines

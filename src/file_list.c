@@ -43,7 +43,6 @@ static void ExecuteFileListPipelineForFileArray(char *pipelineName, char *comman
 static FileList * GetUnprocessedFilesForPipeline(char *pipelineName);
 static List *GetUnprocessedFileList(char *pipelineName, char *listFunction,
 									char *filePattern);
-static void InsertProcessedFile(char *pipelineName, char *path);
 
 
 /* crunchy_lake.default_file_list_function setting */
@@ -438,7 +437,7 @@ GetUnprocessedFileList(char *pipelineName, char *listFunction, char *filePattern
  * InsertProcessedFile adds a new processed file to the processed_files
  * table.
  */
-static void
+void
 InsertProcessedFile(char *pipelineName, char *path)
 {
 	Oid			savedUserId = InvalidOid;

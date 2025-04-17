@@ -33,6 +33,7 @@ static char *GetCronCommandForPipeline(char *pipelineName);
 PG_FUNCTION_INFO_V1(incremental_create_sequence_pipeline);
 PG_FUNCTION_INFO_V1(incremental_create_time_interval_pipeline);
 PG_FUNCTION_INFO_V1(incremental_create_file_list_pipeline);
+PG_FUNCTION_INFO_V1(incremental_skip_file);
 PG_FUNCTION_INFO_V1(incremental_execute_pipeline);
 PG_FUNCTION_INFO_V1(incremental_reset_pipeline);
 PG_FUNCTION_INFO_V1(incremental_drop_pipeline);
@@ -256,6 +257,24 @@ incremental_create_file_list_pipeline(PG_FUNCTION_ARGS)
 								" and schedule %s",
 								pipelineName, jobId, schedule)));
 	}
+
+	PG_RETURN_VOID();
+}
+
+
+/*
+ * incremental_skip_file marks a file as already-processed, such that it will
+ * be skipped in future file list pipeline runs.
+ */
+Datum
+incremental_skip_file(PG_FUNCTION_ARGS)
+{
+	char	   *pipelineName = text_to_cstring(PG_GETARG_TEXT_P(0));
+	char	   *path = text_to_cstring(PG_GETARG_TEXT_P(1));
+	PipelineDesc *pipelineDesc = ReadPipelineDesc(pipelineName);
+
+	EnsurePipelineOwner(pipelineName, pipelineDesc->ownerId);
+	InsertProcessedFile(pipelineName, path);
 
 	PG_RETURN_VOID();
 }

@@ -8,3 +8,4 @@ void		InitializeFileListPipelineState(char *pipelineName, char *prefix, bool bat
 void		RemoveProcessedFileList(char *pipelineName);
 void		ExecuteFileListPipeline(char *pipelineName, char *command);
 char	   *SanitizeListFunction(char *listFunction);
+void		InsertProcessedFile(char *pipelineName, char *path);
