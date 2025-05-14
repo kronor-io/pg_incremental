@@ -1,3 +1,7 @@
+### pg\_incremental v1.3.0 (May 15, 2025)
+* Adds an incremental.skip\_file function to use for erroneuous files in file pipelines
+* Removes the hard dependency on pg\_cron at CREATE EXTENSION time
+
 ### pg\_incremental v1.2.0 (February 26, 2025)
 
 * Fixes bug that could cause batched file list pipelines to crash
