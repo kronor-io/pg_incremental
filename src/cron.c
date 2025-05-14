@@ -3,6 +3,7 @@
 #include "miscadmin.h"
 
 #include "catalog/pg_authid.h"
+#include "commands/extension.h"
 #include "crunchy/incremental/cron.h"
 #include "executor/spi.h"
 #include "utils/builtins.h"
@@ -14,6 +15,14 @@
 int64
 ScheduleCronJob(char *jobName, char *schedule, char *command)
 {
+	bool		missingOk = true;
+
+	if (get_extension_oid("pg_cron", missingOk) == InvalidOid)
+		ereport(ERROR, (errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+						errmsg("pg_cron extension is not created"),
+						errdetail("By default, pg_incremental uses pg_cron to schedule a periodic job"),
+						errhint("Run CREATE EXTENSION pg_cron; or pass schedule := NULL")));
+
 	char	   *query =
 		"SELECT cron.schedule($1, $2, $3)";
 
