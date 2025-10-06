@@ -33,7 +33,7 @@ ParseQuery(char *command, List *paramTypes)
 
 	RawStmt    *rawStmt = (RawStmt *) linitial(parseTreeList);
 	List	   *queryTreeList =
-		pg_analyze_and_rewrite_params(rawStmt, command, params, paramCount, NULL);
+		pg_analyze_and_rewrite_params(rawStmt, command, NULL, NULL, NULL);
 
 	/* we already checked parseTreeList lenght above */
 	Assert(list_length(queryTreeList) == 1);
@@ -55,7 +55,7 @@ DeparseQuery(Query *query)
 							 GUC_ACTION_SAVE, true, 0, false);
 
 	bool		pretty = false;
-	char	   *newQuery = pg_get_query_def(query, pretty);
+	char	   *newQuery = nodeToString(query, pretty);
 
 	AtEOXact_GUC(true, save_nestlevel);
 
