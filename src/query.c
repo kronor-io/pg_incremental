@@ -55,7 +55,7 @@ DeparseQuery(Query *query)
 							 GUC_ACTION_SAVE, true, 0, false);
 
 	bool		pretty = false;
-	char	   *newQuery = nodeToString(query, pretty);
+	char	   *newQuery = nodeToString(query);
 
 	AtEOXact_GUC(true, save_nestlevel);
 
