@@ -8,6 +8,7 @@
 #include "crunchy/incremental/cron.h"
 #include "crunchy/incremental/file_list.h"
 #include "crunchy/incremental/pipeline.h"
+#include "crunchy/incremental/kronor_compat_v14.h"
 #include "crunchy/incremental/query.h"
 #include "crunchy/incremental/sequence.h"
 #include "crunchy/incremental/time_interval.h"
